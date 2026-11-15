@@ -158,8 +158,10 @@ svg { display: block; }
 .hero-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .hero .btn-primary { background: #fff; color: var(--brand-dark); box-shadow: 0 10px 24px rgba(20,10,80,.18); }
 .hero .btn-primary:hover { background: #F7F6FF; }
-.hero .btn-outline { color: #fff; border: 1px solid rgba(255,255,255,.35); }
-.hero .btn-outline:hover { background: rgba(255,255,255,.12); }
+/* hero 是深紫底，必须显式覆盖全局 .btn-outline 的白色背景，
+   否则会变成「白底白字」，按钮看起来只剩两个空白框。 */
+.hero .btn-outline { color: #fff; border: 1px solid rgba(255,255,255,.38); background: rgba(255,255,255,.08); }
+.hero .btn-outline:hover { background: rgba(255,255,255,.18); border-color: rgba(255,255,255,.6); color: #fff; }
 
 .today-card { padding: 22px; }
 .today-card h3 { margin: 0 0 2px; font-size: 15px; font-weight: 800; }
