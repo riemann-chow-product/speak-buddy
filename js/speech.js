@@ -81,16 +81,12 @@
     return list[Math.min(idx, list.length - 1)] || list[0];
   }
 
-  /** 首次用户手势预热语音引擎：很多浏览器第一次 speak 会有明显启动延迟。 */
+  /** 首次用户手势预热：只加载音色列表并 resume，绝不往队列塞空句子。
+   *  Chrome 里一个只含空格、音量为 0 的 utterance 可能永远不结束，会把后续所有朗读卡死。 */
   function warmUp() {
-    if (warmedUp || !synthesis || !Utterance) return;
+    if (warmedUp || !synthesis) return;
     warmedUp = true;
-    try {
-      var w = new Utterance(' ');
-      w.volume = 0;
-      w.rate = 1.5;
-      synthesis.speak(w);
-    } catch (e) { /* noop */ }
+    try { refreshVoices(); } catch (e) { /* noop */ }
     try { if (synthesis.paused) synthesis.resume(); } catch (e) { /* noop */ }
   }
   if (doc) {
@@ -128,14 +124,30 @@
     if (!cur || cur.done) return;
     cur.done = true;
     clearAttempt(cur);
+    detachUtter(cur);
     if (current === cur) current = null;
     lastStatus = { ok: ok, voice: cur.voiceName, attempts: cur.attempts, reason: reason || '' };
     cur.resolve({ ok: ok, voice: cur.voiceName, attempts: cur.attempts, reason: reason || '' });
   }
 
+  /** cancel() 会让仍在队列里的 utterance 抛 onerror('interrupted')。
+   *  主动取消前必须先解绑回调，否则重试会被自己的 cancel 误判成失败。 */
+  function detachUtter(cur) {
+    var u = cur && cur.utter;
+    if (!u) return;
+    u.onstart = null; u.onend = null; u.onerror = null; u.onboundary = null;
+    cur.utter = null;
+  }
+
+  function safeCancel(cur) {
+    if (cur) detachUtter(cur);
+    try { synthesis.cancel(); } catch (e) { /* noop */ }
+  }
+
   function abortCurrent() {
-    if (current) settle(current, false, 'interrupted');
-    if (synthesis) { try { synthesis.cancel(); } catch (e) { /* noop */ } }
+    var prev = current;
+    if (prev) settle(prev, false, 'interrupted');
+    safeCancel(prev);
   }
 
   function retry(cur, reason) {
@@ -143,7 +155,7 @@
     if (cur.attempts >= 2) { settle(cur, false, reason); return; }
     clearAttempt(cur);
     cur.started = false;
-    try { synthesis.cancel(); } catch (e) { /* noop */ }
+    safeCancel(cur);
     // 重试时换音色 + 恢复常速，绕开「语速/音色组合导致的断流」
     var t = setTimeout(function () { startAttempt(cur); }, 160);
     cur.timers.push(t);
@@ -152,7 +164,7 @@
   function startAttempt(cur) {
     if (cur.done || cur.token !== tokenSeq) return;
     cur.attempts += 1;
-    try { synthesis.cancel(); } catch (e) { /* noop */ }
+    safeCancel(cur);
     // cancel 是异步的，紧接着 speak 会丢首音节；等一小拍再真正说话
     var t = setTimeout(function () { doSpeak(cur); }, cur.attempts > 1 ? 90 : 30);
     cur.timers.push(t);
@@ -186,6 +198,10 @@
     u.onerror = function (ev) {
       var err = (ev && ev.error) || 'unknown';
       if (err === 'interrupted' || err === 'canceled') { settle(cur, false, err); return; }
+      // 自动播放策略 / 音色不可用：重试也只会再被拒一次，直接把原因交给界面提示
+      if (err === 'not-allowed' || err === 'language-unavailable' || err === 'voice-unavailable') {
+        settle(cur, false, err); return;
+      }
       retry(cur, err);
     };
 

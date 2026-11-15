@@ -340,6 +340,74 @@
 
   function reset() { state = defaults(); save(); }
 
+  /* ---------------- 备份与恢复 ----------------
+   * 记录存在 localStorage，按「来源（协议 + 域名 + 端口）」隔离：
+   * 同一台电脑 / 同一浏览器 / 同一打开方式 → 记录一直在；
+   * 清除浏览器数据、无痕窗口、换浏览器、file:// 与 http:// 互换 → 读不到。
+   * 所以提供 JSON 备份，让用户能自己迁移与恢复。 */
+  var BACKUP_VERSION = 1;
+  function exportBackup() {
+    var tts = null;
+    try { tts = JSON.parse(global.localStorage.getItem('speakbuddy.tts.v1') || 'null'); } catch (e) { /* noop */ }
+    return {
+      app: 'SpeakBuddy',
+      type: 'learning-backup',
+      version: BACKUP_VERSION,
+      exportedAt: new Date().toISOString(),
+      state: JSON.parse(JSON.stringify(state)),
+      tts: tts
+    };
+  }
+  function importBackup(data) {
+    if (!data || data.app !== 'SpeakBuddy' || data.type !== 'learning-backup' ||
+        !data.state || typeof data.state !== 'object') {
+      return { ok: false, reason: '这不是有效的 SpeakBuddy 备份文件' };
+    }
+    var incoming = data.state;
+    if (!incoming.lessons || typeof incoming.lessons !== 'object') {
+      return { ok: false, reason: '备份内容不完整，缺少学习记录' };
+    }
+    var d = defaults();
+    Object.keys(d).forEach(function (k) {
+      if (incoming[k] !== undefined && incoming[k] !== null) d[k] = incoming[k];
+    });
+    state = d;
+    state.route = null; // 交给 ensureRoute() 按当前兴趣与定级重建
+    save();
+    if (data.tts && typeof data.tts === 'object') {
+      try { global.localStorage.setItem('speakbuddy.tts.v1', JSON.stringify(data.tts)); } catch (e) { /* noop */ }
+    }
+    return {
+      ok: true,
+      lessons: Object.keys(state.lessons).length,
+      dialogues: Object.keys(state.dialogues || {}).length,
+      sentences: state.totalSentences || 0,
+      xp: state.xp || 0
+    };
+  }
+  function storageInfo() {
+    var available = true;
+    try {
+      global.localStorage.setItem('__sb_probe__', '1');
+      global.localStorage.removeItem('__sb_probe__');
+    } catch (e) { available = false; }
+    var origin = '当前站点';
+    try {
+      origin = global.location && global.location.protocol === 'file:'
+        ? '本地文件 (file://)' : (global.location && global.location.host) || origin;
+    } catch (e) { /* noop */ }
+    return {
+      available: available,
+      key: KEY,
+      origin: origin,
+      lessons: Object.keys(state.lessons).length,
+      dialogues: Object.keys(state.dialogues || {}).length,
+      sentences: state.totalSentences || 0,
+      xp: state.xp || 0,
+      onboarded: state.onboarded
+    };
+  }
+
   SB.store = {
     get: function () { return state; },
     save: save,
@@ -375,6 +443,9 @@
     weakList: weakList,
     achievements: function () { return state.achievements.slice(); },
     level: level,
-    reset: reset
+    reset: reset,
+    exportBackup: exportBackup,
+    importBackup: importBackup,
+    storageInfo: storageInfo
   };
 })(window);

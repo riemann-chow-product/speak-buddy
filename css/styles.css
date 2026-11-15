@@ -128,6 +128,9 @@ svg { display: block; }
 .btn-ghost:hover { border-color: #CFCBFA; color: var(--brand); background: #FBFAFF; }
 .btn-soft { background: var(--brand-tint); color: var(--brand-dark); }
 .btn-soft:hover { background: #E7E2FF; }
+/* 全局边框按钮：原先只有 .hero .btn-outline 有样式，弹窗里的会退化成裸文字 */
+.btn-outline { border: 1px solid var(--line); color: var(--ink-2); background: var(--surface); }
+.btn-outline:hover { border-color: #CFCBFA; background: #FBFAFF; color: var(--brand-dark); }
 .btn-lg { padding: 14px 26px; font-size: 14px; border-radius: 14px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; transform: none !important; box-shadow: none; }
 .icon-btn { width: 38px; height: 38px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; color: var(--ink-3); transition: .18s; }
@@ -701,7 +704,10 @@ svg { display: block; }
 .dlg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 15px; }
 .dlg-card { position: relative; display: flex; flex-direction: column; text-align: left; padding: 20px 20px 16px; border-radius: 18px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-sm); transition: .18s ease; min-height: 214px; }
 .dlg-card:hover { transform: translateY(-4px); border-color: #CFCBFA; box-shadow: var(--shadow); }
-.rec-flag { position: absolute; top: 0; right: 16px; transform: translateY(-50%); padding: 3px 10px; border-radius: 20px; background: var(--brand); color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .3px; box-shadow: 0 5px 12px rgba(99,91,255,.24); }
+/* 只作用于情景对话卡片；学习路线卡片用的是 `.lesson .rec-flag`，
+   两者不能共用通用规则，否则这里的 translateY(-50%) 会被 overflow:hidden 裁掉半截。 */
+.dlg-card .rec-flag { position: absolute; top: 0; right: 16px; transform: translateY(-50%); padding: 3px 10px; border-radius: 20px; background: var(--brand); color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .3px; box-shadow: 0 5px 12px rgba(99,91,255,.24); }
+.lesson .rec-flag { transform: none; letter-spacing: normal; box-shadow: none; }
 .dlg-card-top { display: flex; align-items: center; justify-content: space-between; }
 .dlg-card-icon { width: 42px; height: 42px; border-radius: 13px; display: grid; place-items: center; }
 .dlg-card h4 { margin: 15px 0 2px; font-size: 16px; font-weight: 800; letter-spacing: -.3px; }
@@ -828,4 +834,36 @@ svg { display: block; }
   .record-side { width: 70px; font-size: 10px; }
   .bubble-col { max-width: 85%; }
   .dlg-scene { padding: 14px; }
+}
+
+/* ==========================================================================
+   朗读状态与失败提示：TTS 被浏览器拦截时不能静默无声
+   ========================================================================== */
+.btn.playing { background: var(--brand-tint); color: var(--brand-dark); border-color: #DDD7FF; }
+.tts-inline-warn { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; padding: 10px 13px; border-radius: 11px; background: var(--amber-tint); border: 1px solid #F6E0B8; color: #8A651B; font-size: 11px; line-height: 1.65; }
+.tts-inline-warn svg { flex: 0 0 auto; margin-top: 2px; }
+.tts-status { flex-wrap: wrap; }
+.tts-status-tip { flex: 0 0 100%; margin-top: 4px; color: #B87709; font-size: 11px; font-weight: 600; line-height: 1.6; }
+
+/* ==========================================================================
+   学习记录：存档状态 / 备份与恢复
+   ========================================================================== */
+.head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.modal.backup-modal { width: min(540px, 100%); max-height: 88vh; overflow-y: auto; padding: 22px; }
+.backup-answer, .backup-warn { display: flex; align-items: flex-start; gap: 10px; padding: 13px 15px; border-radius: 13px; margin-bottom: 12px; }
+.backup-answer { background: var(--mint-tint); border: 1px solid #C7EDE5; color: #0B7A6E; }
+.backup-warn { background: var(--amber-tint); border: 1px solid #F6E0B8; color: #8A651B; }
+.backup-answer > svg, .backup-warn > svg { flex: 0 0 auto; margin-top: 2px; }
+.backup-answer b, .backup-warn b { display: block; font-size: 12px; font-weight: 800; }
+.backup-answer span, .backup-warn div { display: block; font-size: 11px; line-height: 1.7; margin-top: 3px; }
+.backup-summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 16px; }
+.backup-summary > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-radius: 11px; background: #F8F8FD; border: 1px solid var(--line-2); font-size: 11px; }
+.backup-summary span { color: var(--ink-4); }
+.backup-summary b { color: var(--ink-2); font-weight: 800; }
+.backup-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.backup-actions .btn { flex: 1 1 180px; }
+.backup-modal .hint { margin-top: 14px; font-size: 11px; color: var(--ink-4); line-height: 1.7; }
+@media (max-width: 680px) {
+  .backup-summary { grid-template-columns: 1fr; }
+  .head-actions { width: 100%; }
 }

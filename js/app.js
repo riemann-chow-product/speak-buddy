@@ -40,7 +40,10 @@
     chat: '<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 9 9 0 0 1-3.9-.9L3 21l1.9-5.6a9 9 0 0 1-.9-3.9A8.5 8.5 0 0 1 12.5 3 8.5 8.5 0 0 1 21 11.5z"/>',
     heart: '<path d="M20.8 5.6a5.2 5.2 0 0 0-7.4 0L12 7l-1.4-1.4a5.2 5.2 0 0 0-7.4 7.4L12 21l8.8-8a5.2 5.2 0 0 0 0-7.4z"/>',
     coffee: '<path d="M4 8h13v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8z"/><path d="M17 9h2a2.5 2.5 0 0 1 0 5h-2"/><path d="M7 3v2"/><path d="M11 3v2"/>',
-    code: '<path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/><path d="m13 5-2 14"/>'
+    code: '<path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/><path d="m13 5-2 14"/>',
+    download: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 18v3h16v-3"/>',
+    upload: '<path d="M12 17V5"/><path d="m7 10 5-5 5 5"/><path d="M4 18v3h16v-3"/>',
+    shield: '<path d="M12 2.5 20 6v6c0 5-3.4 8.3-8 9.5-4.6-1.2-8-4.5-8-9.5V6l8-3.5z"/><path d="m9 12 2 2 4-4"/>'
   };
   function icon(name, size) {
     size = size || 18;
@@ -95,8 +98,13 @@
   function toast(msg, type) {
     var root = doc.getElementById('toast-root');
     if (!root) return;
+    // 同一条消息短时间内不重复堆叠；总量也限制，避免右上角糊成一片
+    var old = root.querySelectorAll('.toast');
+    for (var i = 0; i < old.length; i++) if (old[i].dataset.msg === msg) old[i].remove();
+    while (root.children.length >= 3) root.removeChild(root.firstChild);
     var el = doc.createElement('div');
     el.className = 'toast' + (type ? ' ' + type : '');
+    el.dataset.msg = msg;
     el.innerHTML = icon(type === 'warn' ? 'alert' : type === 'success' ? 'checkCircle' : 'info', 15) + '<span>' + esc(msg) + '</span>';
     root.appendChild(el);
     setTimeout(function () { el.style.opacity = '0'; el.style.transform = 'translateX(20px)'; el.style.transition = '.3s'; setTimeout(function () { el.remove(); }, 320); }, 3100);
@@ -333,6 +341,7 @@
       a.phase = 'idle';
       a.waveLevels = [];
       updateAssessRecordUI();
+      autoReadAssess(item);
     } else {
       var q = item.item;
       card.innerHTML =
@@ -345,6 +354,16 @@
         '<div id="assess-result"></div>';
       a.phase = 'choice';
     }
+  }
+
+  /** 进入跟读题自动读一遍。用户刚点过「下一题 / 开始测评」，手势仍在生效窗口内；
+   *  失败时不弹 toast，只在题目区留一条可操作的持久提示（另有「先听一遍」按钮可手动重试）。 */
+  function autoReadAssess(item) {
+    var a = state.assessment;
+    setTimeout(function () {
+      if (state.assessment !== a || !a || a.item !== item || a.phase !== 'idle') return;
+      speakText(item.sentence.en, 0.9, null, true);
+    }, 280);
   }
 
   function updateAssessRecordUI() {
@@ -1818,7 +1837,10 @@
         '<div><h4>' + esc(a.title) + '</h4><p>' + esc(a.desc) + (got ? ' · 已达成' : ' · 未达成') + '</p></div></div>';
     }).join('');
     return '<div class="section-head" style="margin-top:0"><div><h2>成就徽章</h2><p>已解锁 ' + earned.length + ' / ' + SB.data.achievements.length + '</p></div>' +
-      '<button class="btn btn-ghost" data-action="confirm-reset">' + icon('settings', 14) + ' 重置学习数据</button></div>' +
+      '<div class="head-actions">' +
+        '<button class="btn btn-ghost" data-action="backup-modal">' + icon('shield', 14) + ' 我的学习记录</button>' +
+        '<button class="btn btn-ghost" data-action="confirm-reset">' + icon('settings', 14) + ' 重置学习数据</button>' +
+      '</div></div>' +
       '<div class="achievement-grid">' + items + '</div>' +
       '<div class="card" style="margin-top:24px;padding:20px;font-size:12px;color:var(--ink-3);line-height:1.8">' +
       '<b style="color:var(--ink-2)">两种练习方式</b><br>' +
@@ -1832,7 +1854,9 @@
       '真实模式：浏览器调用语音识别返回文本，系统再做词级对齐，结合语速、停顿与音量给出三维评分。建议用 Chrome 通过 localhost / HTTPS 打开并允许麦克风。<br>' +
       '体验模式：识别不可用、权限被拒或手动开启时自动启用，模拟数据演示完整流程并明确标注，XP 减半。<br>' +
       '发音设置：顶栏耳机按钮可切换英语音色与语速、试听短句。系统优先使用本地音色（不依赖网络），并会在检测到朗读卡住时自动换音色、恢复常速重试一次；弹窗里能看到实际使用的音色与重试次数。<br>' +
-      '所有学习进度、兴趣选择、定级结果与发音偏好保存在本机浏览器（localStorage），不会上传服务器。</div>';
+      '<b style="color:var(--ink-2)">下次进来，学习记录还在吗？</b><br>' +
+      '在。进度自动保存在这台电脑的这个浏览器里（localStorage），不用登录、不上传服务器；同一浏览器、同一打开地址再来，兴趣、定级、关卡星数、XP、连击、对话成绩都会保留。<br>' +
+      '但清除浏览器数据、无痕窗口、换浏览器 / 换电脑，或在「直接双击 index.html」与「localhost 网页」之间切换时会读不到（两者来源不同、数据不互通）。点右上角「我的学习记录」可以查看存档状态、导出 JSON 备份，换设备时用备份恢复即可。</div>';
   }
 
   /* ---------------- 视图渲染 ---------------- */
@@ -1866,9 +1890,49 @@
     if (rate >= 0.8) return Math.max(0.55, base * 0.94);
     return Math.max(0.5, base * 0.7);
   }
-  function speakText(text, rate, btn) {
-    if (btn) { btn.classList.add('playing'); setTimeout(function () { btn.classList.remove('playing'); }, 1000); }
-    return SB.speech.speak(text, { rate: effectiveRate(rate) });
+  function ttsFailMessage(res) {
+    var r = (res && res.reason) || 'unknown';
+    if (r === 'not-allowed') return '浏览器拦截了语音播放：先点一下页面空白处，再点一次播放；若仍无声，请用 Chrome 打开并检查是否静音';
+    if (r === 'unsupported') return '当前浏览器不支持语音合成，建议改用 Chrome 打开';
+    if (r === 'no-start' || r === 'stalled') return '朗读没有启动（已自动换音色重试）。可在顶栏「发音设置」里换一个本地音色';
+    if (r === 'interrupted') return '朗读被打断了，再点一次播放即可';
+    if (r === 'language-unavailable' || r === 'voice-unavailable') return '当前音色不可用，请在「发音设置」里换一个英语音色';
+    return '朗读未完成（' + r + '），可在「发音设置」里换音色再试';
+  }
+
+  /** 朗读失败时在题目区留一条持久提示，避免「点了没反应、也没任何说明」。 */
+  function showTtsWarn(msg) {
+    var host = doc.querySelector('.assess-tools') || doc.querySelector('.sentence-tools') || doc.querySelector('.tts-test');
+    if (!host) return;
+    var el = doc.getElementById('tts-inline-warn');
+    if (!el) {
+      el = doc.createElement('div');
+      el.id = 'tts-inline-warn';
+      el.className = 'tts-inline-warn';
+      host.insertAdjacentElement('afterend', el);
+    }
+    el.innerHTML = icon('alert', 13) + '<span>' + esc(msg) + '</span>';
+  }
+  function clearTtsWarn() {
+    var el = doc.getElementById('tts-inline-warn');
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  function speakText(text, rate, btn, quiet) {
+    if (btn) btn.classList.add('playing');
+    return SB.speech.speak(text, { rate: effectiveRate(rate) }).then(function (res) {
+      if (btn) btn.classList.remove('playing');
+      if (!res || !res.ok) {
+        var msg = ttsFailMessage(res);
+        if (!quiet) toast(msg, 'warn');
+        showTtsWarn(msg);
+      } else {
+        clearTtsWarn();
+        // 只有真的播出来了才计入「听 1 次标准发音」任务
+        if (state.route === 'practice') SB.store.markListen();
+      }
+      return res;
+    });
   }
   function showTtsModal() {
     var s = SB.speech.settings();
@@ -1908,8 +1972,78 @@
     var st = s.status;
     el.innerHTML = icon(st.ok ? 'checkCircle' : 'alert', 13) +
       (st.ok ? '播放完成' : '播放未完成') + ' · 音色「' + esc(st.voice || '系统默认') + '」 · 尝试 ' + st.attempts + ' 次' +
-      (st.attempts > 1 ? '（已自动换音色重试）' : '') + (st.reason && !st.ok ? ' · ' + esc(st.reason) : '');
+      (st.attempts > 1 ? '（已自动换音色重试）' : '') +
+      (!st.ok ? '<span class="tts-status-tip">' + esc(ttsFailMessage(st)) + '</span>' : '');
   }
+  /* ---------------- 学习记录备份与恢复 ---------------- */
+  function showBackupModal() {
+    var info = SB.store.storageInfo();
+    var rows = [
+      ['存档位置', esc(info.origin) + ' · 本机浏览器'],
+      ['已通关关卡', info.lessons + ' 关'],
+      ['完成对话', info.dialogues + ' 场'],
+      ['累计跟读', info.sentences + ' 句'],
+      ['累计经验', info.xp + ' XP'],
+      ['本机存储', info.available ? '可用 · 记录会自动保存' : '不可用 · 关闭页面后会丢失，请导出备份']
+    ];
+    doc.getElementById('modal-root').innerHTML =
+      '<div class="modal-mask"><div class="modal backup-modal">' +
+      '<div class="tts-head"><div class="tts-head-icon">' + icon('shield', 20) + '</div>' +
+      '<div><h3>我的学习记录</h3><p>记录在哪、下次还在不在、怎么带走</p></div>' +
+      '<button class="icon-btn" data-action="close-modal" title="关闭">' + icon('close', 16) + '</button></div>' +
+      '<div class="backup-answer">' + icon('checkCircle', 15) +
+      '<div><b>下次在这台电脑打开，记录还在。</b><span>进度自动保存在这个浏览器的本机存储里（localStorage），不用登录、不上传服务器。同一浏览器、同一打开地址再来，兴趣、定级、关卡星数、XP、连击、对话成绩都会保留。</span></div></div>' +
+      '<div class="backup-warn">' + icon('alert', 14) +
+      '<div><b>但这几种情况会读不到：</b>清除浏览器数据、用无痕窗口、换浏览器、换电脑，或在「直接双击 index.html」与「localhost 网页」之间切换（两者是不同来源，数据不互通）。建议定期导出备份。</div></div>' +
+      '<div class="backup-summary">' + rows.map(function (r) {
+        return '<div><span>' + r[0] + '</span><b>' + r[1] + '</b></div>';
+      }).join('') + '</div>' +
+      '<div class="backup-actions">' +
+      '<button type="button" class="btn btn-primary" data-action="backup-export">' + icon('download', 14) + ' 导出备份文件</button>' +
+      '<button type="button" class="btn btn-outline" data-action="backup-import">' + icon('upload', 14) + ' 从备份恢复</button>' +
+      '</div>' +
+      '<input type="file" id="backup-file" accept=".json,application/json" style="display:none">' +
+      '<div class="hint">导出一个 JSON 文件收好；换电脑或清缓存后，用「从备份恢复」选回这个文件即可。恢复会覆盖当前记录。</div>' +
+      '</div></div>';
+    var input = doc.getElementById('backup-file');
+    if (input) input.addEventListener('change', handleBackupFile);
+  }
+
+  function exportBackupFile() {
+    try {
+      var data = SB.store.exportBackup();
+      var blob = new global.Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      var url = global.URL.createObjectURL(blob);
+      var a = doc.createElement('a');
+      a.href = url;
+      a.download = 'speakbuddy-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+      doc.body.appendChild(a);
+      a.click();
+      doc.body.removeChild(a);
+      setTimeout(function () { global.URL.revokeObjectURL(url); }, 1000);
+      toast('备份已导出，请把这个 JSON 文件收好', 'success');
+    } catch (e) {
+      toast('导出失败：' + (e && e.message ? e.message : '未知错误'), 'warn');
+    }
+  }
+
+  function handleBackupFile(e) {
+    var file = e.target && e.target.files && e.target.files[0];
+    if (!file) return;
+    var reader = new global.FileReader();
+    reader.onload = function () {
+      var parsed;
+      try { parsed = JSON.parse(String(reader.result)); }
+      catch (err) { toast('文件不是有效的 JSON', 'warn'); return; }
+      var res = SB.store.importBackup(parsed);
+      if (!res.ok) { toast(res.reason, 'warn'); return; }
+      toast('已恢复 ' + res.lessons + ' 关 · ' + res.dialogues + ' 场对话 · ' + res.xp + ' XP，正在刷新…', 'success');
+      setTimeout(function () { global.location.reload(); }, 950);
+    };
+    reader.onerror = function () { toast('读取文件失败', 'warn'); };
+    reader.readAsText(file);
+  }
+
   function openLesson(id) {
     var lesson = SB.data.getLesson(id);
     if (!lesson) return;
@@ -1934,10 +2068,7 @@
     if (a === 'nav') go('#/' + el.dataset.to);
     else if (a === 'lesson') openLesson(el.dataset.id);
     else if (a === 'locked') toast('先完成路线上的上一关，才能解锁这一关', 'warn');
-    else if (a === 'speak-text') {
-      speakText(el.dataset.text, parseFloat(el.dataset.rate), el);
-      if (state.route === 'practice') SB.store.markListen();
-    }
+    else if (a === 'speak-text') speakText(el.dataset.text, parseFloat(el.dataset.rate), el);
     else if (a === 'speak-word') speakText(el.dataset.word, 0.85, null);
     else if (a === 'record') { if (state.phase === 'recording') endRecording(); else startRecording(); }
     else if (a === 'retry') { clearSentence(); renderView(); }
@@ -2043,6 +2174,12 @@
       renderChrome(); renderView();
     }
     else if (a === 'confirm-reset') showResetModal();
+    else if (a === 'backup-modal') showBackupModal();
+    else if (a === 'backup-export') exportBackupFile();
+    else if (a === 'backup-import') {
+      var bf = doc.getElementById('backup-file');
+      if (bf) bf.click();
+    }
     else if (a === 'close-modal') doc.getElementById('modal-root').innerHTML = '';
     else if (a === 'do-reset') {
       SB.store.reset();
