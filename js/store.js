@@ -3,6 +3,9 @@
   'use strict';
   var SB = (global.SB = global.SB || {});
   var KEY = 'speakbuddy.v1';
+  // 冗余镜像：主存档损坏 / 被某个版本误删时，能从这份自动恢复
+  var MIRROR_KEY = 'speakbuddy.v1.mirror';
+  var recoveredFromMirror = false;
 
   function pad(n) { return n < 10 ? '0' + n : String(n); }
   function dateStr(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
@@ -44,30 +47,43 @@
   var memoryFallback = null;
 
   function load() {
+    var parsed = null;
     try {
       var raw = global.localStorage.getItem(KEY);
-      if (!raw) return defaults();
-      var parsed = JSON.parse(raw);
-      var d = defaults();
-      Object.keys(d).forEach(function (k) {
-        if (parsed[k] !== undefined && parsed[k] !== null) d[k] = parsed[k];
-      });
-      // 兼容旧存档：补齐当天新增字段
-      Object.keys(d.daily).forEach(function (k) {
-        var day = d.daily[k], e = emptyDay();
-        Object.keys(e).forEach(function (f) { if (day[f] === undefined) day[f] = e[f]; });
-      });
-      return d;
-    } catch (e) {
-      return memoryFallback || defaults();
+      if (raw) parsed = JSON.parse(raw);
+    } catch (e) { /* 主存档损坏，继续尝试镜像 */ }
+    if (!parsed || typeof parsed !== 'object') {
+      try {
+        var mirror = JSON.parse(global.localStorage.getItem(MIRROR_KEY) || 'null');
+        if (mirror && mirror.state && typeof mirror.state === 'object') {
+          parsed = mirror.state;
+          recoveredFromMirror = true;
+        }
+      } catch (e) { /* noop */ }
     }
+    if (!parsed) return memoryFallback || defaults();
+    var d = defaults();
+    Object.keys(d).forEach(function (k) {
+      if (parsed[k] !== undefined && parsed[k] !== null) d[k] = parsed[k];
+    });
+    // 兼容旧存档：补齐当天新增字段
+    Object.keys(d.daily).forEach(function (k) {
+      var day = d.daily[k], e = emptyDay();
+      Object.keys(e).forEach(function (f) { if (day[f] === undefined) day[f] = e[f]; });
+    });
+    return d;
   }
 
   var state = load();
 
   function save() {
     memoryFallback = state;
-    try { global.localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* 内存兜底 */ }
+    try {
+      var text = JSON.stringify(state);
+      global.localStorage.setItem(KEY, text);
+      // 写一份镜像，主存档被误删或损坏时 load() 能自动救回来
+      global.localStorage.setItem(MIRROR_KEY, JSON.stringify({ savedAt: Date.now(), state: state }));
+    } catch (e) { /* 内存兜底 */ }
   }
 
   function updateStreak() {
@@ -358,6 +374,22 @@
       tts: tts
     };
   }
+  /** 同步码用的精简存档：丢掉可重建的每日明细与路线，让复制粘贴的文本不至于太长。
+   *  importBackup() 会用 defaults() 补齐缺失字段，所以精简版能直接恢复。 */
+  function exportCompact() {
+    var full = exportBackup();
+    var s = full.state;
+    var compact = { version: s.version };
+    ['xp', 'maxScore', 'streak', 'lastDate', 'totalSeconds', 'totalSentences',
+      'lessons', 'dialogues', 'weak', 'achievements', 'onboarded', 'interests',
+      'placement', 'combo', 'bestCombo', 'soundOn'].forEach(function (k) { compact[k] = s[k]; });
+    return {
+      app: 'SpeakBuddy', type: 'learning-backup', version: BACKUP_VERSION,
+      compact: true, exportedAt: new Date().toISOString(),
+      state: compact, tts: full.tts
+    };
+  }
+
   function importBackup(data) {
     if (!data || data.app !== 'SpeakBuddy' || data.type !== 'learning-backup' ||
         !data.state || typeof data.state !== 'object') {
@@ -400,6 +432,8 @@
       available: available,
       key: KEY,
       origin: origin,
+      recovered: recoveredFromMirror,
+      hasRecords: Object.keys(state.lessons).length > 0 || (state.totalSentences || 0) > 0 || (state.xp || 0) > 0,
       lessons: Object.keys(state.lessons).length,
       dialogues: Object.keys(state.dialogues || {}).length,
       sentences: state.totalSentences || 0,
@@ -445,6 +479,7 @@
     level: level,
     reset: reset,
     exportBackup: exportBackup,
+    exportCompact: exportCompact,
     importBackup: importBackup,
     storageInfo: storageInfo
   };

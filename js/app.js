@@ -207,6 +207,10 @@
           '<button type="button" class="btn btn-primary btn-lg" id="onb-submit" data-action="onb-submit">' + icon('target', 17) + ' 下一步 · 开始定级测评</button>' +
           '<div class="onb-hint" id="onb-counter">已选 ' + (state.onb.selected.length + state.onb.custom.length) + ' 个兴趣 · 内置最多 3 个</div>' +
         '</div>' +
+        '<div class="onb-restore">' + icon('shield', 14) +
+          '<span>更新后记录不见了？不用重新练。</span>' +
+          '<button type="button" data-action="backup-modal">从同步码 / 备份文件恢复</button>' +
+        '</div>' +
       '</div></div>';
     refreshTopicUI();
   }
@@ -1934,6 +1938,38 @@
       return res;
     });
   }
+  /** 把「为什么没声音」拆成可观测指标，并给出下一步该点哪个按钮。 */
+  function ttsDiagHTML() {
+    var d = SB.speech.diagnostics();
+    var engine = d.paused ? '已暂停' : d.speaking ? '正在播放' : d.pending ? '队列等待中' : '空闲';
+    var last = d.status && d.status.attempts
+      ? (d.status.ok ? '成功' : '失败 · ' + esc(d.status.reason)) : '尚未试听';
+    var rows = [
+      ['语音合成', d.supported ? '支持' : '不支持'],
+      ['可用音色', d.voices + ' · 英语 ' + d.english + ' / 本地 ' + d.local],
+      ['引擎状态', engine],
+      ['上次朗读', last]
+    ];
+    var advice;
+    if (!d.supported) advice = '当前浏览器不提供语音合成能力，请用 Chrome 或 Edge 打开。';
+    else if (!d.voices) advice = '浏览器还没有加载到任何语音包，请点「重置语音引擎」，或检查系统是否安装了语音合成语音。';
+    else if (!d.english) advice = '没有英语音色，中文音色读英文可能不出声。请在下方音色列表里手动选一个，或改用 Chrome。';
+    else if (d.paused) advice = '语音引擎处于暂停状态，点「重置语音引擎」后再试听。';
+    else if (d.status && d.status.reason === 'not-allowed') advice = '浏览器拦截了语音播放：先点一下页面空白处再点「播放试听」；若仍无声，请检查站点声音权限，或用 Chrome 通过 localhost 打开。';
+    else if (d.status && (d.status.reason === 'no-start' || d.status.reason === 'stalled')) advice = '朗读没启动。先点「测设备音量」：听得到说明设备正常、是语音引擎卡住，点「重置语音引擎」再试；听不到就是系统静音或浏览器音频被禁用。';
+    else if (d.status && d.status.attempts && !d.status.ok) advice = esc(ttsFailMessage(d.status));
+    else advice = '引擎看起来正常。选一个带「本地」的英语音色，再点「播放试听」；如果仍没声音，先点「测设备音量」确认设备能出声。';
+    return '<div class="tts-diag-grid">' + rows.map(function (r) {
+      return '<div><span>' + r[0] + '</span><b>' + r[1] + '</b></div>';
+    }).join('') + '</div>' +
+      '<div class="tts-advice">' + icon('info', 14) + '<div>' + advice + '</div></div>' +
+      '<div class="tts-device-result" id="tts-device-result"></div>';
+  }
+  function refreshTtsDiag() {
+    var box = doc.getElementById('tts-diag-box');
+    if (box) box.innerHTML = ttsDiagHTML();
+  }
+
   function showTtsModal() {
     var s = SB.speech.settings();
     var list = SB.speech.voiceList();
@@ -1947,15 +1983,20 @@
     }).join('');
     doc.getElementById('modal-root').innerHTML =
       '<div class="modal-mask"><div class="modal tts-modal">' +
-      '<div class="tts-head"><div class="tts-head-icon">' + icon('headphones', 20) + '</div><div><h3>发音设置</h3><p>读起来卡顿或听不清？换一个音色试试</p></div>' +
+      '<div class="tts-head"><div class="tts-head-icon">' + icon('headphones', 20) + '</div><div><h3>发音设置</h3><p>没声音？先做两项自检，再换音色</p></div>' +
       '<button class="icon-btn" data-action="close-modal" title="关闭">' + icon('close', 16) + '</button></div>' +
+      '<div class="tts-diag" id="tts-diag-box">' + ttsDiagHTML() + '</div>' +
       '<div class="tts-field"><label>英语音色</label>' +
       '<select id="tts-voice" data-action="tts-voice">' + options + '</select>' +
-      '<div class="hint">带「本地」的音色直接在设备上合成，不依赖网络，通常最流畅；「在线」音色遇到网络波动容易断流。当前共 ' + list.length + ' 个英语音色。</div></div>' +
+      '<div class="hint">带「本地」的音色直接在设备上合成，不依赖网络，通常最流畅；「在线」音色遇到网络波动容易断流。当前共 ' + list.length + ' 个英语音色。换完音色记得再点一次「播放试听」。</div></div>' +
       '<div class="tts-field"><label>朗读语速</label><div class="rate-row">' + rates + '</div>' +
       '<div class="hint">有些音色在过快或过慢的语速下会卡顿，1.00x 最稳。系统检测到卡住时会自动换音色、恢复常速重试一次。</div></div>' +
       '<div class="tts-test"><div><b>试听一句</b><p>Is the flight on time?</p></div>' +
       '<button type="button" class="btn btn-primary" data-action="tts-test">' + icon('play', 14) + ' 播放试听</button></div>' +
+      '<div class="tts-test-actions">' +
+      '<button type="button" class="btn btn-ghost" data-action="tts-test-device">' + icon('volume', 14) + ' 测设备音量</button>' +
+      '<button type="button" class="btn btn-ghost" data-action="tts-reset-engine">' + icon('refresh', 14) + ' 重置语音引擎</button>' +
+      '</div>' +
       '<div class="tts-status" id="tts-status"></div>' +
       '<div class="modal-actions"><button class="btn btn-ghost" data-action="tts-reset">恢复默认</button>' +
       '<button class="btn btn-primary" data-action="close-modal">完成</button></div></div></div>';
@@ -1976,6 +2017,70 @@
       (!st.ok ? '<span class="tts-status-tip">' + esc(ttsFailMessage(st)) + '</span>' : '');
   }
   /* ---------------- 学习记录备份与恢复 ---------------- */
+  /** 同步码：把精简存档编码成一段可复制的文本，跨地址 / 跨设备迁移不用找文件。 */
+  function encodeSyncCode(data) {
+    var json = JSON.stringify(data);
+    var bin;
+    if (global.TextEncoder) {
+      var bytes = new global.TextEncoder().encode(json);
+      bin = '';
+      for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    } else {
+      bin = unescape(encodeURIComponent(json));
+    }
+    return 'SB1:' + btoa(bin);
+  }
+  function decodeSyncCode(code) {
+    var s = String(code || '').trim().replace(/\s+/g, '');
+    if (s.indexOf('SB1:') !== 0) throw new Error('同步码应以 SB1: 开头');
+    var bin = atob(s.slice(4));
+    var json;
+    if (global.TextDecoder) {
+      var buf = new Uint8Array(bin.length);
+      for (var j = 0; j < bin.length; j++) buf[j] = bin.charCodeAt(j);
+      json = new global.TextDecoder().decode(buf);
+    } else {
+      json = decodeURIComponent(escape(bin));
+    }
+    return JSON.parse(json);
+  }
+  function copySyncCode() {
+    var code = encodeSyncCode(SB.store.exportCompact());
+    var manual = function () {
+      var out = doc.getElementById('sync-output');
+      var box = doc.getElementById('sync-output-box');
+      if (out && box) { box.style.display = 'block'; out.value = code; out.focus(); out.select(); }
+      toast('自动复制不可用，已显示同步码，请手动全选复制', 'warn');
+      return false;
+    };
+    if (global.navigator && global.navigator.clipboard && global.navigator.clipboard.writeText) {
+      return global.navigator.clipboard.writeText(code).then(function () {
+        toast('同步码已复制，粘贴到备忘录保存即可', 'success');
+        return true;
+      }).catch(manual);
+    }
+    try {
+      var ta = doc.createElement('textarea');
+      ta.value = code; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      doc.body.appendChild(ta); ta.select();
+      var ok = doc.execCommand('copy');
+      doc.body.removeChild(ta);
+      if (ok) { toast('同步码已复制，粘贴到备忘录保存即可', 'success'); return Promise.resolve(true); }
+    } catch (e) { /* noop */ }
+    return Promise.resolve(manual());
+  }
+  function restoreFromSyncCode() {
+    var input = doc.getElementById('sync-input');
+    if (!input || !input.value.trim()) { toast('请先粘贴同步码', 'warn'); return; }
+    var data;
+    try { data = decodeSyncCode(input.value); }
+    catch (e) { toast('同步码无效：' + e.message, 'warn'); return; }
+    var res = SB.store.importBackup(data);
+    if (!res.ok) { toast(res.reason, 'warn'); return; }
+    toast('已恢复 ' + res.lessons + ' 关 · ' + res.dialogues + ' 场对话 · ' + res.xp + ' XP', 'success');
+    setTimeout(function () { global.location.reload(); }, 950);
+  }
+
   function showBackupModal() {
     var info = SB.store.storageInfo();
     var rows = [
@@ -1993,17 +2098,32 @@
       '<button class="icon-btn" data-action="close-modal" title="关闭">' + icon('close', 16) + '</button></div>' +
       '<div class="backup-answer">' + icon('checkCircle', 15) +
       '<div><b>下次在这台电脑打开，记录还在。</b><span>进度自动保存在这个浏览器的本机存储里（localStorage），不用登录、不上传服务器。同一浏览器、同一打开地址再来，兴趣、定级、关卡星数、XP、连击、对话成绩都会保留。</span></div></div>' +
+      (info.recovered ? '<div class="backup-answer">' + icon('refresh', 15) + '<div><b>已从本地快照自动恢复记录。</b><span>主存档曾损坏或被清掉，系统自动用冗余镜像恢复了进度。</span></div></div>' : '') +
       '<div class="backup-warn">' + icon('alert', 14) +
-      '<div><b>但这几种情况会读不到：</b>清除浏览器数据、用无痕窗口、换浏览器、换电脑，或在「直接双击 index.html」与「localhost 网页」之间切换（两者是不同来源，数据不互通）。建议定期导出备份。</div></div>' +
-      '<div class="backup-summary">' + rows.map(function (r) {
-        return '<div><span>' + r[0] + '</span><b>' + r[1] + '</b></div>';
-      }).join('') + '</div>' +
+      '<div><b>发版后记录「不见了」，多半是换了打开地址。</b>记录绑定在<b>当前这个地址</b>（<code>' + esc(info.origin) + '</code>）：端口、域名、或「直接双击 index.html」与「localhost 网页」只要不一样，就是两份互不相通的存档。请固定用同一个地址访问；清浏览器数据、无痕窗口、换浏览器 / 换电脑同理会读不到。</div></div>' +
+      (!info.hasRecords ? '<div class="backup-empty">' + icon('info', 14) + ' 当前地址还没有学习记录。如果你是更新后第一次打开，用下面的同步码或备份文件恢复即可，不用重新练。</div>' : '') +
       '<div class="backup-actions">' +
       '<button type="button" class="btn btn-primary" data-action="backup-export">' + icon('download', 14) + ' 导出备份文件</button>' +
       '<button type="button" class="btn btn-outline" data-action="backup-import">' + icon('upload', 14) + ' 从备份恢复</button>' +
       '</div>' +
+      '<div class="backup-sync">' +
+        '<div class="backup-sync-head">' + icon('bolt', 14) + ' 换地址 / 换设备最省事：同步码</div>' +
+        '<p>把进度变成一段文本存进备忘录或发给自己；新地址打开后粘贴回来就能恢复，不用找文件。建议每次练完顺手复制一次。</p>' +
+        '<div class="backup-actions">' +
+          '<button type="button" class="btn btn-soft" data-action="sync-copy">复制同步码</button>' +
+          '<button type="button" class="btn btn-outline" data-action="sync-toggle">粘贴同步码恢复</button>' +
+        '</div>' +
+        '<div class="sync-box" id="sync-output-box" style="display:none">' +
+          '<label>手动复制这段文本</label><textarea id="sync-output" rows="3" readonly></textarea></div>' +
+        '<div class="sync-box" id="sync-paste-box" style="display:none">' +
+          '<label>粘贴之前保存的同步码</label><textarea id="sync-input" rows="3" placeholder="SB1:..."></textarea>' +
+          '<button type="button" class="btn btn-primary" data-action="sync-restore">恢复记录</button></div>' +
+      '</div>' +
+      '<div class="backup-summary">' + rows.map(function (r) {
+        return '<div><span>' + r[0] + '</span><b>' + r[1] + '</b></div>';
+      }).join('') + '</div>' +
       '<input type="file" id="backup-file" accept=".json,application/json" style="display:none">' +
-      '<div class="hint">导出一个 JSON 文件收好；换电脑或清缓存后，用「从备份恢复」选回这个文件即可。恢复会覆盖当前记录。</div>' +
+      '<div class="hint">恢复会覆盖当前记录。同步码只包含核心进度，备份文件包含完整的每日明细。</div>' +
       '</div></div>';
     var input = doc.getElementById('backup-file');
     if (input) input.addEventListener('change', handleBackupFile);
@@ -2125,7 +2245,30 @@
     else if (a === 'tts-reset') { SB.speech.setVoice('', ''); SB.speech.setRate(0.92); showTtsModal(); toast('已恢复默认音色与语速', 'success'); }
     else if (a === 'tts-test') {
       el.disabled = true;
-      SB.speech.speak('Is the flight on time?').then(function () { el.disabled = false; updateTtsStatus(); });
+      SB.speech.speak('Is the flight on time?').then(function () {
+        el.disabled = false;
+        updateTtsStatus();
+        refreshTtsDiag();
+      });
+    }
+    else if (a === 'tts-test-device') {
+      el.disabled = true;
+      SB.fx.testTone().then(function (ok) {
+        el.disabled = false;
+        var box = doc.getElementById('tts-device-result');
+        if (!ok) {
+          if (box) box.innerHTML = icon('alert', 13) + ' 当前浏览器无法输出音频，请检查系统音量、静音开关和站点声音权限。';
+          toast('设备没有输出测试音，问题不在语音引擎', 'warn');
+        } else {
+          if (box) box.innerHTML = icon('checkCircle', 13) + ' 已播放一段测试音。听得到 → 设备正常，朗读无声是语音引擎问题；听不到 → 系统静音或音频被禁用。';
+          toast('已播放测试音，请确认是否听得到', 'success');
+        }
+      });
+    }
+    else if (a === 'tts-reset-engine') {
+      var diag = SB.speech.resetEngine();
+      toast('语音引擎已重置 · 检测到 ' + diag.english + ' 个英语音色，请再点一次播放试听', 'success');
+      showTtsModal();
     }
     else if (a === 'onb-topic') {
       var id = el.dataset.topic;
@@ -2180,6 +2323,14 @@
       var bf = doc.getElementById('backup-file');
       if (bf) bf.click();
     }
+    else if (a === 'sync-copy') copySyncCode();
+    else if (a === 'sync-toggle') {
+      var sp = doc.getElementById('sync-paste-box');
+      if (sp) sp.style.display = sp.style.display === 'none' ? 'block' : 'none';
+      var si = doc.getElementById('sync-input');
+      if (si && sp && sp.style.display === 'block') si.focus();
+    }
+    else if (a === 'sync-restore') restoreFromSyncCode();
     else if (a === 'close-modal') doc.getElementById('modal-root').innerHTML = '';
     else if (a === 'do-reset') {
       SB.store.reset();
@@ -2247,6 +2398,9 @@
       '</div>';
     if (!global.location.hash) global.location.hash = '#/home';
     onRoute();
+    if (SB.store.storageInfo().recovered) {
+      setTimeout(function () { toast('已从本地快照自动恢复学习记录', 'success'); }, 350);
+    }
   }
 
   state.onb.selected = ['daily', 'travel']; // 预选两个高频话题，降低起步门槛

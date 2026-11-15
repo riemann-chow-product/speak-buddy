@@ -276,6 +276,38 @@
     });
   }
 
+  /** 语音引擎体检：把「为什么没声音」拆成几项可观测的指标。 */
+  function diagnostics() {
+    var all = [];
+    try { all = (synthesis && synthesis.getVoices()) || []; } catch (e) { /* noop */ }
+    var en = englishVoices();
+    return {
+      supported: !!(synthesis && Utterance),
+      voices: all.length,
+      english: en.length,
+      local: en.filter(function (v) { return v.localService === true; }).length,
+      speaking: synthesis ? !!synthesis.speaking : false,
+      pending: synthesis ? !!synthesis.pending : false,
+      paused: synthesis ? !!synthesis.paused : false,
+      status: { ok: lastStatus.ok, voice: lastStatus.voice, attempts: lastStatus.attempts, reason: lastStatus.reason }
+    };
+  }
+
+  /** Chrome 偶尔会卡在 paused / pending，cancel + resume + 重拉音色能救回来。 */
+  function resetEngine() {
+    try {
+      if (current) settle(current, false, 'interrupted');
+      safeCancel(null);
+    } catch (e) { /* noop */ }
+    try {
+      if (synthesis) {
+        if (synthesis.paused) synthesis.resume();
+        refreshVoices();
+      }
+    } catch (e) { /* noop */ }
+    return diagnostics();
+  }
+
   /* ---------------- 语音识别 ---------------- */
   /** 创建一次识别会话。返回 controller 或 null（浏览器不支持）。
    *  onPartial(interimText) / onFinal({transcript, alternatives, confidence}) / onError(err) / onEnd(payload)
@@ -360,6 +392,8 @@
     voiceList: voiceList,
     settings: getSettings,
     setVoice: setVoice,
-    setRate: setRate
+    setRate: setRate,
+    diagnostics: diagnostics,
+    resetEngine: resetEngine
   };
 })(window);

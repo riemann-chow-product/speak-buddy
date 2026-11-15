@@ -108,8 +108,35 @@
     setTimeout(close, 6500);
   }
 
+  /** 设备音量自检：绕开 speechSynthesis，直接用 Web Audio 播一段明显可听的音阶。
+   *  如果这个也听不到，说明是系统静音 / 浏览器音频输出问题，而不是语音引擎的锅。
+   *  不受音效开关影响，自检永远可以播放。 */
+  function testTone() {
+    return new Promise(function (resolve) {
+      var c = audio();
+      if (!c) { resolve(false); return; }
+      try {
+        var now = c.currentTime + 0.05;
+        [523.25, 659.25, 783.99, 1046.5].forEach(function (f, i) {
+          var osc = c.createOscillator(), gain = c.createGain();
+          var t = now + i * 0.26;
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(f, t);
+          gain.gain.setValueAtTime(0.0001, t);
+          gain.gain.linearRampToValueAtTime(0.22, t + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+          osc.connect(gain);
+          gain.connect(c.destination);
+          try { osc.start(t); osc.stop(t + 0.25); } catch (e) { /* noop */ }
+        });
+        setTimeout(function () { resolve(true); }, 1250);
+      } catch (e) { resolve(false); }
+    });
+  }
+
   SB.fx = {
     play: play,
+    testTone: testTone,
     setEnabled: setEnabled,
     isEnabled: isEnabled,
     confetti: confetti,
