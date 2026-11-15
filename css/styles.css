@@ -842,6 +842,19 @@ svg { display: block; }
 .btn.playing { background: var(--brand-tint); color: var(--brand-dark); border-color: #DDD7FF; }
 .tts-inline-warn { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; padding: 10px 13px; border-radius: 11px; background: var(--amber-tint); border: 1px solid #F6E0B8; color: #8A651B; font-size: 11px; line-height: 1.65; }
 .tts-inline-warn svg { flex: 0 0 auto; margin-top: 2px; }
+
+/* 新域名首次打开 / 刷新后，浏览器要求一次用户激活才允许朗读 */
+.voice-gate { position: fixed; right: 20px; bottom: 20px; z-index: 60; width: min(560px, calc(100vw - 40px)); display: flex; align-items: center; gap: 13px; padding: 13px 15px; border-radius: 16px; border: 1px solid #D9D2FF; background: linear-gradient(100deg, #F6F3FF 0%, #FBF9FF 100%); box-shadow: 0 18px 46px rgba(43, 38, 110, .18); animation: voiceGateIn .28s ease both; }
+@keyframes voiceGateIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+.voice-gate-icon { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 11px; display: flex; align-items: center; justify-content: center; background: var(--brand); color: #fff; }
+.voice-gate-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.voice-gate-copy b { font-size: 12px; color: var(--ink); font-weight: 800; }
+.voice-gate-copy span { font-size: 11px; line-height: 1.6; color: var(--ink-3); }
+.voice-gate .btn { flex: 0 0 auto; white-space: nowrap; }
+@media (max-width: 640px) {
+  .voice-gate { flex-wrap: wrap; }
+  .voice-gate .btn { width: 100%; justify-content: center; }
+}
 .tts-status { flex-wrap: wrap; }
 .tts-status-tip { flex: 0 0 100%; margin-top: 4px; color: #B87709; font-size: 11px; font-weight: 600; line-height: 1.6; }
 

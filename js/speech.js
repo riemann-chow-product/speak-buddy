@@ -33,6 +33,7 @@
   var tokenSeq = 0;
   var current = null;
   var warmedUp = false;
+  var unlocked = false; // 本次文档里是否已有过一次成功朗读
   var lastStatus = { ok: false, voice: '', attempts: 0, reason: '' };
 
   /* ---------------- 音色 ---------------- */
@@ -126,6 +127,7 @@
     clearAttempt(cur);
     detachUtter(cur);
     if (current === cur) current = null;
+    if (ok) unlocked = true;
     lastStatus = { ok: ok, voice: cur.voiceName, attempts: cur.attempts, reason: reason || '' };
     cur.resolve({ ok: ok, voice: cur.voiceName, attempts: cur.attempts, reason: reason || '' });
   }
@@ -224,6 +226,35 @@
     }, 700);
   }
 
+  /* ---------------- 自动播放解锁状态 ----------------
+   * Chrome / Edge 对 speechSynthesis 同样套用 autoplay policy：文档一次用户激活
+   * 都没有时，speak() 会直接触发 onerror('not-allowed')，一句都不读。
+   * 这个许可是「按文档 + 按 origin」的：刷新页面清零，新域名也没有媒体互动
+   * 指数（MEI）累积，所以线上首次访问的自动朗读会稳定落在这个空窗里。
+   * 而一次带手势的成功朗读之后，同文档内后续朗读都会放行（sticky activation）。
+   */
+  function hasGesture() {
+    try {
+      var ua = global.navigator && global.navigator.userActivation;
+      if (ua && typeof ua.hasBeenActive === 'boolean') return ua.hasBeenActive;
+    } catch (e) { /* noop */ }
+    return unlocked;
+  }
+  function needsGesture() { return !unlocked && !hasGesture(); }
+  function isUnlocked() { return unlocked; }
+
+  /** 线上首次加载时 getVoices() 往往还是空的（实测 0 → 199 需要几百毫秒），
+   *  这时朗读会退回系统默认音色，容易落到需要联网的在线音色上而断流。 */
+  function waitVoices(cur, tries) {
+    if (cur.done || cur.token !== tokenSeq) return;
+    refreshVoices();
+    if ((cachedVoices.length && englishVoices().length) || tries >= 6) {
+      cur.timers.push(setTimeout(function () { startAttempt(cur); }, 70));
+      return;
+    }
+    cur.timers.push(setTimeout(function () { waitVoices(cur, tries + 1); }, 120));
+  }
+
   /** 朗读英文。返回 Promise<{ok, voice, attempts, reason}>，结束后 resolve。 */
   function speak(text, options) {
     options = options || {};
@@ -248,8 +279,8 @@
       };
       current = cur;
       cur.startTime = Date.now();
-      // 与上一次 cancel 拉开距离，避免连续切换时首音节被吞
-      cur.timers.push(setTimeout(function () { startAttempt(cur); }, 70));
+      // 等音色列表就绪、并与上一次 cancel 拉开距离，避免首音节被吞
+      waitVoices(cur, 0);
     });
   }
 
@@ -394,6 +425,8 @@
     setVoice: setVoice,
     setRate: setRate,
     diagnostics: diagnostics,
-    resetEngine: resetEngine
+    resetEngine: resetEngine,
+    needsGesture: needsGesture,
+    isUnlocked: isUnlocked
   };
 })(window);

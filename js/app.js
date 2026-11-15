@@ -360,10 +360,12 @@
     }
   }
 
-  /** 进入跟读题自动读一遍。用户刚点过「下一题 / 开始测评」，手势仍在生效窗口内；
-   *  失败时不弹 toast，只在题目区留一条可操作的持久提示（另有「先听一遍」按钮可手动重试）。 */
+  /** 进入跟读题自动读一遍。但浏览器要求「本次文档有过用户激活」才放行朗读，
+   *  线上新域名首次打开 / 刷新后的深链接没有这个许可，硬读只会静默失败，
+   *  所以先给「开启发音」按钮，用那一次点击完成解锁并读出当前句。 */
   function autoReadAssess(item) {
     var a = state.assessment;
+    if (SB.speech.needsGesture()) { showVoiceGate(item.sentence.en, '听这一句并开启'); return; }
     setTimeout(function () {
       if (state.assessment !== a || !a || a.item !== item || a.phase !== 'idle') return;
       speakText(item.sentence.en, 0.9, null, true);
@@ -795,7 +797,8 @@
     // 进入新一轮时自动把对方的话念出来，模拟真实对话节奏
     setTimeout(function () {
       if (state.dialogue === d && state.route === 'dialogue-play' && d.phase === 'idle') {
-        SB.speech.speak(turn.partner.en);
+        if (SB.speech.needsGesture()) { showVoiceGate(turn.partner.en, '听对方说并开启'); return; }
+        speakText(turn.partner.en, 0.9, null, true);
       }
     }, 420);
   }
@@ -1896,7 +1899,7 @@
   }
   function ttsFailMessage(res) {
     var r = (res && res.reason) || 'unknown';
-    if (r === 'not-allowed') return '浏览器拦截了语音播放：先点一下页面空白处，再点一次播放；若仍无声，请用 Chrome 打开并检查是否静音';
+    if (r === 'not-allowed') return '浏览器拦截了自动朗读（新域名首次打开常见）：点下方「开启发音」一次即可，之后全程自动播放；若仍无声请检查站点声音权限';
     if (r === 'unsupported') return '当前浏览器不支持语音合成，建议改用 Chrome 打开';
     if (r === 'no-start' || r === 'stalled') return '朗读没有启动（已自动换音色重试）。可在顶栏「发音设置」里换一个本地音色';
     if (r === 'interrupted') return '朗读被打断了，再点一次播放即可';
@@ -1922,6 +1925,32 @@
     if (el && el.parentNode) el.parentNode.removeChild(el);
   }
 
+  /** Chrome 要求文档至少有过一次用户激活才放行 speechSynthesis，而且这个许可
+   *  是按文档 + 按 origin 的：线上新域名第一次打开、或刷新页面后，测评/对话的
+   *  自动朗读会被静默拦成 not-allowed。这里不再赌运气，直接给一步到位的入口：
+   *  这一次点击既解锁引擎，也把当前该听的句子读出来，之后整个单页会话都能自动朗读。 */
+  function showVoiceGate(text, label) {
+    if (doc.querySelector('.tts-modal')) return; // 设置弹窗里已有「播放试听」
+    if (doc.getElementById('voice-gate')) return;
+    // 固定浮层：测评/练习/对话/首页局部 DOM 都会被重绘，浮层不会被冲掉，
+    // 也保证「线上第一次打开」时用户一定看得见这个唯一需要的操作。
+    var host = doc.getElementById('app') || doc.body;
+    var box = doc.createElement('div');
+    box.className = 'voice-gate';
+    box.id = 'voice-gate';
+    box.innerHTML =
+      '<div class="voice-gate-icon">' + icon('volume', 18) + '</div>' +
+      '<div class="voice-gate-copy"><b>先开启发音</b>' +
+        '<span>浏览器要求先有一次点击才允许网页朗读。点一下会立刻读出这一句，之后全程自动播放。</span></div>' +
+      '<button type="button" class="btn btn-primary" data-action="voice-unlock" data-text="' + esc(text) + '">' +
+        icon('play', 13) + ' ' + esc(label || '点一下开启') + '</button>';
+    host.appendChild(box);
+  }
+  function clearVoiceGate() {
+    var el = doc.getElementById('voice-gate');
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
   function speakText(text, rate, btn, quiet) {
     if (btn) btn.classList.add('playing');
     return SB.speech.speak(text, { rate: effectiveRate(rate) }).then(function (res) {
@@ -1930,8 +1959,10 @@
         var msg = ttsFailMessage(res);
         if (!quiet) toast(msg, 'warn');
         showTtsWarn(msg);
+        if (res && res.reason === 'not-allowed') showVoiceGate(text, '点一下开启发音');
       } else {
         clearTtsWarn();
+        clearVoiceGate();
         // 只有真的播出来了才计入「听 1 次标准发音」任务
         if (state.route === 'practice') SB.store.markListen();
       }
@@ -1955,7 +1986,7 @@
     else if (!d.voices) advice = '浏览器还没有加载到任何语音包，请点「重置语音引擎」，或检查系统是否安装了语音合成语音。';
     else if (!d.english) advice = '没有英语音色，中文音色读英文可能不出声。请在下方音色列表里手动选一个，或改用 Chrome。';
     else if (d.paused) advice = '语音引擎处于暂停状态，点「重置语音引擎」后再试听。';
-    else if (d.status && d.status.reason === 'not-allowed') advice = '浏览器拦截了语音播放：先点一下页面空白处再点「播放试听」；若仍无声，请检查站点声音权限，或用 Chrome 通过 localhost 打开。';
+    else if (d.status && d.status.reason === 'not-allowed') advice = '浏览器拦截了自动朗读：新域名第一次打开、或刚刷新页面时必须先有一次点击。页面上会出现「开启发音」按钮，点一次即可解锁；若仍无声，请检查该站点的声音权限（Chrome 按域名分别记忆，localhost 允许不代表线上域名允许）。';
     else if (d.status && (d.status.reason === 'no-start' || d.status.reason === 'stalled')) advice = '朗读没启动。先点「测设备音量」：听得到说明设备正常、是语音引擎卡住，点「重置语音引擎」再试；听不到就是系统静音或浏览器音频被禁用。';
     else if (d.status && d.status.attempts && !d.status.ok) advice = esc(ttsFailMessage(d.status));
     else advice = '引擎看起来正常。选一个带「本地」的英语音色，再点「播放试听」；如果仍没声音，先点「测设备音量」确认设备能出声。';
@@ -2234,6 +2265,16 @@
       renderChrome(); renderView();
     }
     else if (a === 'edit-interests') showInterestModal();
+    else if (a === 'voice-unlock') {
+      var vText = el.dataset.text;
+      el.disabled = true;
+      el.innerHTML = icon('volume', 13) + ' 正在朗读…';
+      speakText(vText, 0.9, null, true).then(function (res) {
+        el.disabled = false;
+        if (res && res.ok) { clearVoiceGate(); toast('发音已开启，之后会自动朗读', 'success'); }
+        else el.innerHTML = icon('play', 13) + ' 再点一次开启';
+      });
+    }
     else if (a === 'tts-settings') showTtsModal();
     else if (a === 'tts-rate') {
       var tr = parseFloat(el.dataset.rate);
