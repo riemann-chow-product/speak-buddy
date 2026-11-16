@@ -1951,8 +1951,8 @@
     var r = (res && res.reason) || 'unknown';
     if (r === 'not-allowed') return '浏览器拦截了自动朗读（新域名首次打开常见）：点下方「开启发音」一次即可，之后全程自动播放；若仍无声请检查站点声音权限';
     if (r === 'unsupported') return '当前浏览器不支持语音合成，建议改用 Chrome 打开';
-    if (r === 'online-failed') return '本地语音引擎和在线发音都没能播放，请检查网络连接与站点声音权限后重试';
-    if (r === 'no-start' || r === 'stalled') return '本地朗读没有启动，已自动尝试在线发音；仍无声请检查网络与站点声音权限';
+    if (r === 'online-failed') return '这次没放出声音：应用里无需设置，点下方「开启发音」再试一次即可。若仍无声，请在浏览器地址栏左侧图标 →「网站设置」→「声音」选「允许」（Safari：设置 → 网站 → 自动播放 → 允许全部），并暂时关闭广告拦截插件；系统音量与输出设备也确认一下。';
+    if (r === 'no-start' || r === 'stalled') return '本地朗读没有启动，已自动尝试在线发音；仍无声请点「开启发音」再试一次，并检查站点声音权限与网络';
     if (r === 'interrupted') return '朗读被打断了，再点一次播放即可';
     if (r === 'language-unavailable' || r === 'voice-unavailable') return '当前音色不可用，请在「发音设置」里换一个英语音色';
     return '朗读未完成（' + r + '），可在「发音设置」里换音色再试';
@@ -1982,7 +1982,12 @@
    *  这一次点击既解锁引擎，也把当前该听的句子读出来，之后整个单页会话都能自动朗读。 */
   function showVoiceGate(text, label) {
     if (doc.querySelector('.tts-modal')) return; // 设置弹窗里已有「播放试听」
-    if (doc.getElementById('voice-gate')) return;
+    if (doc.getElementById('voice-gate')) {
+      // 已经显示过了：刷新按钮文案即可，避免重复堆叠浮层
+      var oldBtn = doc.querySelector('#voice-gate [data-action="voice-unlock"]');
+      if (oldBtn && label) oldBtn.innerHTML = icon('play', 13) + ' ' + esc(label);
+      return;
+    }
     // 固定浮层：测评/练习/对话/首页局部 DOM 都会被重绘，浮层不会被冲掉，
     // 也保证「线上第一次打开」时用户一定看得见这个唯一需要的操作。
     var host = doc.getElementById('app') || doc.body;
@@ -1991,8 +1996,8 @@
     box.id = 'voice-gate';
     box.innerHTML =
       '<div class="voice-gate-icon">' + icon('volume', 18) + '</div>' +
-      '<div class="voice-gate-copy"><b>先开启发音</b>' +
-        '<span>浏览器要求先有一次点击才允许网页朗读。点一下会立刻读出这一句，之后全程自动播放。</span></div>' +
+      '<div class="voice-gate-copy"><b>再点一次就能出声</b>' +
+        '<span>浏览器要求由一次真实点击来放行声音。点下面按钮会立刻重读这一句；应用里不需要设置，也无需换音色。</span></div>' +
       '<button type="button" class="btn btn-primary" data-action="voice-unlock" data-text="' + esc(text) + '">' +
         icon('play', 13) + ' ' + esc(label || '点一下开启') + '</button>';
     host.appendChild(box);
@@ -2011,9 +2016,8 @@
         var msg = ttsFailMessage(res);
         if (!quiet) toast(msg, 'warn');
         showTtsWarn(msg);
-        if (res && (res.reason === 'not-allowed' ||
-            (res.reason === 'online-failed' && SB.speech.needsGesture()))) {
-          showVoiceGate(text, '点一下开启发音');
+        if (res && (res.reason === 'not-allowed' || res.reason === 'online-failed')) {
+          showVoiceGate(text, '点一下重播');
         }
       } else {
         clearTtsWarn();
@@ -2050,6 +2054,7 @@
     else if (!d.english) advice = '没有英语音色，中文音色读英文可能不出声。请在下方音色列表里手动选一个，或改用 Chrome。';
     else if (d.paused) advice = '语音引擎处于暂停状态，点「重置语音引擎」后再试听。';
     else if (d.status && d.status.reason === 'not-allowed') advice = '浏览器拦截了自动朗读：新域名第一次打开、或刚刷新页面时必须先有一次点击。页面上会出现「开启发音」按钮，点一次即可解锁；若仍无声，请检查该站点的声音权限（Chrome 按域名分别记忆，localhost 允许不代表线上域名允许）。';
+    else if (d.status && d.status.reason === 'online-failed') advice = '在线发音也没放出声音，通常是浏览器拦了声音而不是应用坏了：应用里无需任何设置，先点页面上的「点一下重播」；若仍无声，在 Chrome/Edge 地址栏左侧图标 →「网站设置」→「声音」选「允许」（Safari：设置 → 网站 → 自动播放 → 允许全部），并暂时关闭广告拦截插件，同时确认系统音量与输出设备。三个在线来源本身可访问，不用换音色、不用配网络。';
     else if (d.localBroken) advice = '本地语音引擎连续启动失败，已自动改为在线发音（需要网络，点击即出声）。点「重置语音引擎」可以再试一次本地音色。';
     else if (d.status && d.status.fallback) advice = '上一次本地引擎没启动，已自动用在线发音播出。属正常兜底，不影响练习；想用本地音色可点「重置语音引擎」再试听。';
     else if (d.status && (d.status.reason === 'no-start' || d.status.reason === 'stalled')) advice = '朗读没启动。先点「测设备音量」：听得到说明设备正常、是语音引擎卡住，点「重置语音引擎」再试；听不到就是系统静音或浏览器音频被禁用。';

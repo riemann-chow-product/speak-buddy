@@ -44,6 +44,25 @@
   var localFailures = 0;   // 连续「本地引擎启动失败」次数
   var localBroken = false; // 本次会话内直接走在线发音，避免每次点击都白等
 
+  // Safari / 部分 Chrome 会要求 audio.play() 必须发生在用户手势的调用栈里。
+  // 在线兜底是在本地引擎失败之后（异步）才播放的，手势早已结束，会被拦成
+  // NotAllowedError。这里在点击的同步栈里先用一个极短的静音 WAV「解锁」同一个
+  // audio 元素，之后换 src 再播就不需要新的手势，也不需要用户去改任何设置。
+  var SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  var primedAudio = null;
+  function primeAudio() {
+    if (typeof global.Audio === 'undefined') return;
+    try {
+      var a = primedAudio || (primedAudio = new global.Audio());
+      a.onended = null; a.onerror = null; a.onplaying = null;
+      try { a.pause(); } catch (e) { /* noop */ }
+      a.preload = 'auto';
+      a.src = SILENT_WAV;                 // 每次点击都在手势里重新解锁一次
+      var p = a.play();
+      if (p && typeof p.catch === 'function') p.catch(function () { /* 忽略：仍可稍后重试 */ });
+    } catch (e) { /* noop */ }
+  }
+
   /* ---------------- 音色 ---------------- */
   function refreshVoices() {
     if (!synthesis) return;
@@ -298,11 +317,14 @@
     if (typeof global.Audio === 'undefined') { settle(cur, false, 'online-failed'); return; }
     cur.attempts = Math.max(cur.attempts, 1);
     var chunks = splitForTTS(cur.text);
-    var audio = new global.Audio();
+    // 复用点击时已解锁的 audio 元素：Safari 会记住「这个元素被手势激活过」
+    var audio = primedAudio || new global.Audio();
+    try { audio.pause(); } catch (e) { /* noop */ }
+    audio.onended = null; audio.onerror = null; audio.onplaying = null;
     audio.preload = 'auto';
     cur.audio = audio;
     var ci = 0, pi = 0, finished = false, started = false, played = 0;
-    var timer = null, ticket = 0;
+    var timer = null, ticket = 0, activeUrl = '';
 
     function clearTimer() { if (timer) { clearTimeout(timer); timer = null; } }
     function cleanup() {
@@ -333,6 +355,7 @@
       var url = urls[pi];
       var my = ++ticket;
       started = false;
+      activeUrl = url;
       try { audio.src = url; } catch (e) { pi += 1; tryCurrent(); return; }
       var p = null;
       try { p = audio.play(); } catch (e) { /* 由 onerror / 超时兜底 */ }
@@ -353,15 +376,18 @@
         tryCurrent();
       }, 5000);
     }
+    function isCurrentSrc() {
+      try { return audio.src === activeUrl; } catch (e) { return true; }
+    }
     audio.onplaying = function () {
-      if (finished || cur.done) return;
+      if (finished || cur.done || !isCurrentSrc()) return;
       started = true;
       clearTimer();
       cur.started = true;
       if (cur.options.onStart) cur.options.onStart();
     };
     audio.onended = function () {
-      if (finished || cur.done) return;
+      if (finished || cur.done || !isCurrentSrc()) return;
       clearTimer();
       played += 1;
       ticket += 1;
@@ -369,7 +395,7 @@
       tryCurrent();
     };
     audio.onerror = function () {
-      if (finished || cur.done) return;
+      if (finished || cur.done || !isCurrentSrc()) return;
       clearTimer();
       ticket += 1; // 让随后可能到达的 play() reject 失效
       pi += 1;
@@ -428,6 +454,7 @@
     return new Promise(function (resolve) {
       if (!clean) { resolve({ ok: false, voice: '', attempts: 0, reason: 'empty', fallback: false }); return; }
       abortCurrent();
+      primeAudio(); // 必须在点击的同步调用栈里，异步之后就解锁不了了
       var cur = {
         token: ++tokenSeq,
         text: clean,
@@ -509,6 +536,7 @@
       paused: synthesis ? !!synthesis.paused : false,
       localBroken: localBroken,
       online: typeof global.Audio !== 'undefined',
+      primed: !!primedAudio,
       autoVoice: autoVoice(),
       status: { ok: lastStatus.ok, voice: lastStatus.voice, attempts: lastStatus.attempts, reason: lastStatus.reason, fallback: lastStatus.fallback }
     };

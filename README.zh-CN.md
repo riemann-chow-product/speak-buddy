@@ -107,7 +107,7 @@ python3 -m http.server 8000
 
 | 文件 | 作用 |
 | --- | --- |
-| [index.html](index.html) | 应用外壳、启动标记、带 `?v=11` 缓存戳的原生 `<script>` / 样式表标签 |
+| [index.html](index.html) | 应用外壳、启动标记、带 `?v=12` 缓存戳的原生 `<script>` / 样式表标签 |
 | [css/styles.css](css/styles.css) | 全部样式：设计变量、布局、组件、动画（原生 CSS，无预处理器） |
 | [js/data.js](js/data.js) | 课程内容：8 单元 / 24 关 / 72 句、音素知识库、成就、每日目标 |
 | [js/store.js](js/store.js) | `localStorage` 存档：XP / 等级、连击、打卡、每日任务 / 宝箱、成就、备份导出导入、同步码、重置 |
@@ -126,7 +126,7 @@ python3 -m http.server 8000
 ## 开发说明
 
 - **无构建步骤。** 改完任意文件刷新即可；用任意静态服务器托管该目录。
-- **缓存戳**：修改 JS / CSS 后，请同步递增 [index.html](index.html) 中 `<link>` 与 `<script>` 上的 `?v=N` 查询串（目前为 `?v=11`），让浏览器加载到新文件。
+- **缓存戳**：修改 JS / CSS 后，请同步递增 [index.html](index.html) 中 `<link>` 与 `<script>` 上的 `?v=N` 查询串（目前为 `?v=12`），让浏览器加载到新文件。
 - **代码风格**：ES5 风格 JavaScript；每个模块都是一个 IIFE，挂到统一的全局命名空间，例如 `window.SB.data`、`window.SB.store`、`window.SB.speech`、`window.SB.scoring`、`window.SB.app`。`index.html` 中的脚本加载顺序有依赖关系（data → speech → recorder → scoring → assessment → dialogue → store → route → fx → app）。
 - **路由**：哈希路由（`#/home`、`#/practice/<关卡 id>`、`#/dialogue[/<场景 id>]`、`#/stats`、`#/achievements`、`#/finish/<关卡 id>`）。
 - **部署**：纯静态站点，推送到 GitHub Pages（保留 `CNAME` 文件）即可。
@@ -137,7 +137,7 @@ python3 -m http.server 8000
 
 ## 常见问题
 
-- **点了播放没声音？** 再点一次（用户手势会解锁自动播放），然后打开 发音设置 →「测设备音量」和「重置语音引擎」。若本地引擎启动失败，系统会自动切换到在线 MP3 兜底，该兜底需要联网。
+- **点了播放没声音？** 再点一次（用户手势会解锁自动播放）；若页面出现「点一下重播 / 点一下开启发音」按钮，点它一次就行——应用里没有任何需要配置的开关。然后打开 发音设置 →「测设备音量」和「重置语音引擎」。若本地引擎启动失败，系统会自动切换到在线 MP3 兜底，该兜底需要联网。若两边都失败，剩下的是浏览器侧的原因：Chrome / Edge 点地址栏左侧图标 →「网站设置」→「声音」→「允许」（或 `chrome://settings/content/sound`）；Safari → 设置 → 网站 → 自动播放 →「允许所有自动播放」；另外确认系统音量与输出设备，并暂时关闭广告拦截插件（可能拦截 `dict.youdao.com`、`fanyi.baidu.com`、`translate.google.com`）。
 - **没有分数 / 显示「未检测到声音」？** 请确认已授予麦克风权限、运行在 `localhost` / HTTPS 上，并使用 Chrome 或 Edge；清晰地朗读后点**重试**。这个 0 分结果是刻意设计的——静音绝不会拿到及格分。
 - **麦克风被拒或没有麦克风？** 发音仍可用（本地引擎或在线 MP3），**体验模式（Experience mode）**提供明确标注的模拟分数，你依然可以浏览所有页面。
 
