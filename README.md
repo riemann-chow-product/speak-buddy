@@ -81,7 +81,7 @@ Open **http://localhost:8000** in Chrome or Edge.
 
 - Pronunciation uses the browser's Web Speech `speechSynthesis`. A **local English voice is auto-selected and saved on load**, and a stalled playback is retried once with the browser's default voice at normal rate.
 - The **first playback is issued synchronously in the click**, respecting the autoplay policy; a click on play always produces audio.
-- If the built-in engine **fails to start (or the browser has none)**, the app automatically falls back to an **online MP3 pronunciation**. Long sentences are split into short chunks (some dictionary TTS services cap the word count) and each chunk is tried against three providers in order: Youdao `dictvoice`, Baidu Fanyi TTS and Google Translate TTS. These are **third-party public endpoints, not part of this project or operated by it**, and they require network access; the app itself ships no audio files. Only the fixed sentence text is sent, never your recording.
+- If the built-in engine **fails to start (or the browser has none)**, the app automatically falls back to an **online MP3 pronunciation**: one continuous clip for the whole sentence, tried against Baidu Fanyi TTS, Google Translate TTS and Youdao `dictvoice` in that order. These are **third-party public endpoints, not part of this project or operated by it**, and they require network access; the app itself ships no audio files. Only the fixed sentence text is sent, never your recording. These endpoints apply hotlink protection — a cross-site `<audio>` request carrying a `Referer` gets an empty body, 404 or 500 — so `index.html` sets a document-wide `<meta name="referrer" content="no-referrer">`. Without it the online fallback silently fails in every browser.
 - The **settings modal** (headphone icon, 发音设置) still lets you manually pick an English voice and rate, run **diagnostics** (engine support, voice counts, engine state, last attempt), play a **device test tone** (Web Audio, bypasses the speech engine), **reset the engine**, audition a sample sentence, and restore defaults. Clicking a word chip also speaks that single word.
 
 ## Data & privacy
@@ -107,7 +107,7 @@ Restoring overwrites current records; keep a backup or sync code before switchin
 
 | File | Role |
 | --- | --- |
-| [index.html](index.html) | App shell, boot markup, plain `<script>` / stylesheet tags with `?v=12` cache-busting |
+| [index.html](index.html) | App shell, boot markup, plain `<script>` / stylesheet tags with `?v=13` cache-busting |
 | [css/styles.css](css/styles.css) | All styling: design tokens, layout, components, animations (plain CSS, no preprocessor) |
 | [js/data.js](js/data.js) | Course content: 8 units / 24 lessons / 72 sentences, phoneme knowledge base, achievements, daily goal |
 | [js/store.js](js/store.js) | `localStorage` store: XP/levels, combos, streak, daily tasks/chest, achievements, backup/export/import, sync code, reset |
@@ -126,7 +126,7 @@ Restoring overwrites current records; keep a backup or sync code before switchin
 ## Development notes
 
 - **No build step.** Edit any file and reload; serve the folder with any static server.
-- **Cache busting:** when you edit JS/CSS, bump the `?v=N` query strings on the `<link>` and `<script>` tags in [index.html](index.html) (currently `?v=12`) so browsers pick up the new files.
+- **Cache busting:** when you edit JS/CSS, bump the `?v=N` query strings on the `<link>` and `<script>` tags in [index.html](index.html) (currently `?v=13`) so browsers pick up the new files.
 - **Code style:** ES5-style JavaScript; every module is an IIFE that attaches to a single global namespace, e.g. `window.SB.data`, `window.SB.store`, `window.SB.speech`, `window.SB.scoring`, `window.SB.app`. Script load order in `index.html` matters (data → speech → recorder → scoring → assessment → dialogue → store → route → fx → app).
 - **Routing:** hash router (`#/home`, `#/practice/<lessonId>`, `#/dialogue[/<scenarioId>]`, `#/stats`, `#/achievements`, `#/finish/<lessonId>`).
 - **Deployment:** it is a fully static site; pushing to GitHub Pages (with the `CNAME` file) is enough.
@@ -137,7 +137,7 @@ Licensed under the **Apache License 2.0** — see [LICENSE](LICENSE).
 
 ## FAQ
 
-- **No sound after clicking play?** Click once more (a user gesture unlocks autoplay); if the app shows a "点一下重播 / 点一下开启发音" button, that single click is all that is needed — there is nothing to configure inside the app. Then open 发音设置 → "测设备音量" (device test tone) and "重置语音引擎" (engine reset). If the local engine cannot start, the app switches to online MP3 automatically; that fallback needs an internet connection. If both still fail, the remaining causes are browser-side: Chrome/Edge → click the icon left of the address bar → **Site settings → Sound → Allow** (or `chrome://settings/content/sound`); Safari → Settings → Websites → Auto-Play → **Allow All Auto-Play**; also check system volume/output device and temporarily disable ad blockers (they may block `dict.youdao.com`, `fanyi.baidu.com`, `translate.google.com`).
+- **No sound after clicking play?** Click once more (a user gesture unlocks autoplay); if the app shows a "点一下重播 / 点一下开启发音" button, that single click is all that is needed — there is nothing to configure inside the app. Then open 发音设置 → "测设备音量" (device test tone) and "重置语音引擎" (engine reset). If the local engine cannot start, the app switches to online MP3 automatically; that fallback needs an internet connection. If both still fail, check the network: corporate proxies, offline use, and ad blockers (which may block `dict.youdao.com`, `fanyi.baidu.com`, `translate.google.com`) are the usual causes. Chrome/Edge → icon left of the address bar → **Site settings → Sound → Allow**, Safari → Settings → Websites → Auto-Play → **Allow All Auto-Play**, plus system volume/output device. There is no in-app switch to configure.
 - **No score / "no speech detected"?** Check that the mic permission is granted, you are on `localhost`/HTTPS, and you are using Chrome or Edge; speak clearly and press **retry**. This 0-point result is intentional — silence is never given a passing score.
 - **Microphone denied or no mic?** Pronunciation still works (local engine or online MP3), and **Experience mode (体验模式)** provides clearly-labelled simulated scores so you can still explore every screen.
 

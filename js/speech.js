@@ -49,13 +49,11 @@
   // NotAllowedError。这里在点击的同步栈里先用一个极短的静音 WAV「解锁」同一个
   // audio 元素，之后换 src 再播就不需要新的手势，也不需要用户去改任何设置。
   var SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-  var primedAudio = null;
+  var unlockAudio = null; // 只负责在用户手势里解锁网页音频，绝不参与实际播放
   function primeAudio() {
     if (typeof global.Audio === 'undefined') return;
     try {
-      var a = primedAudio || (primedAudio = new global.Audio());
-      a.onended = null; a.onerror = null; a.onplaying = null;
-      try { a.pause(); } catch (e) { /* noop */ }
+      var a = unlockAudio || (unlockAudio = new global.Audio());
       a.preload = 'auto';
       a.src = SILENT_WAV;                 // 每次点击都在手势里重新解锁一次
       var p = a.play();
@@ -178,7 +176,11 @@
     cur.done = true;
     clearAttempt(cur);
     detachUtter(cur);
-    if (cur.audio) { try { cur.audio.pause(); } catch (e) { /* noop */ } cur.audio = null; }
+    if (cur.audio) {
+      // 在线 MP3 已经在出声：不要在 resolve 时掐断它，让整句自然读完
+      if (!(ok && cur.keepPlaying)) { try { cur.audio.pause(); } catch (e) { /* noop */ } }
+      cur.audio = null;
+    }
     if (current === cur) current = null;
     if (ok) unlocked = true;
     lastStatus = { ok: !!ok, voice: cur.voiceName, attempts: cur.attempts, reason: reason || '', fallback: !!fallback };
@@ -272,7 +274,7 @@
     cur.timers.push(setTimeout(function () {
       if (cur.done) return;
       if (!cur.started) retry(cur, 'no-start');
-    }, attempt > 1 ? 1200 : 1000));
+    }, attempt > 1 ? 1200 : 1400));
 
     var maxMs = expectedMs(cur.text, rate) + 5000;
     cur.interval = setInterval(function () {
@@ -288,54 +290,53 @@
   /* ---------------- 在线发音兜底 ----------------
    * 本地引擎起不来时，用 <audio> 播放在线 MP3。英语句子是内置的固定内容，
    * 只把句子文本发给第三方朗读服务，不上传任何录音或用户数据。
-   * 有道发音在国内可直连，但它是「词典发音」，一次最多约 7 个词，长句会返回
-   * 500「returned null audio」；因此按 ≤6 词切块顺序播放，并给每块准备多个备选源，
-   * 任何一个源出声即可，保证「点一下就有声音」。 */
-  function splitForTTS(text) {
-    var words = String(text).split(/\s+/).filter(Boolean);
-    if (!words.length) return [String(text)];
-    var chunks = [], cur = [];
-    words.forEach(function (w) {
-      cur.push(w);
-      if (cur.length >= 6) { chunks.push(cur.join(' ')); cur = []; }
-    });
-    if (cur.length) chunks.push(cur.join(' '));
-    return chunks;
-  }
-
-  function chunkUrls(chunk) {
+   *
+   * 重要：这些接口都做了防盗链，浏览器为跨站 <audio> 自动带上 Referer 时，
+   * 百度返回 0 字节 text/html、Google 返回 404、有道返回 500。index.html 中的
+   * <meta name="referrer" content="no-referrer"> 就是为此而设（实测 Chrome 上
+   * audio.referrerPolicy 对媒体元素不生效，只能用文档级策略）。
+   * 去掉 Referer 后百度/Google 都能整句朗读，无需切块，也不会像 206 流式响应
+   * 那样永远等不到 onended：只要 onplaying 触发（真的出声了）就立即判定成功。
+   */
+  function onlineUrls(text) {
     // encodeURIComponent 不转义单引号，个别服务遇到裸引号会报错，统一补成 %27
-    var q = encodeURIComponent(chunk).replace(/'/g, '%27');
+    var q = encodeURIComponent(text).replace(/'/g, '%27');
     return [
-      'https://dict.youdao.com/dictvoice?audio=' + q + '&le=en',
       'https://fanyi.baidu.com/gettts?lan=en&text=' + q + '&spd=3&source=web',
-      'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=' + q
+      'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=' + q,
+      'https://dict.youdao.com/dictvoice?audio=' + q + '&le=en'
     ];
   }
 
   function playOnline(cur) {
     if (typeof global.Audio === 'undefined') { settle(cur, false, 'online-failed'); return; }
     cur.attempts = Math.max(cur.attempts, 1);
-    var chunks = splitForTTS(cur.text);
-    // 复用点击时已解锁的 audio 元素：Safari 会记住「这个元素被手势激活过」
-    var audio = primedAudio || new global.Audio();
-    try { audio.pause(); } catch (e) { /* noop */ }
-    audio.onended = null; audio.onerror = null; audio.onplaying = null;
+    var urls = onlineUrls(cur.text);
+    // 每次用全新的元素：避免解锁用的静音片段残留事件串到真实播放上
+    var audio = new global.Audio();
     audio.preload = 'auto';
     cur.audio = audio;
-    var ci = 0, pi = 0, finished = false, started = false, played = 0;
-    var timer = null, ticket = 0, activeUrl = '';
+    var pi = 0, finished = false, timer = null, ticket = 0;
 
     function clearTimer() { if (timer) { clearTimeout(timer); timer = null; } }
     function cleanup() {
       clearTimer();
       audio.onended = null; audio.onerror = null; audio.onplaying = null;
     }
+    function next() {
+      if (finished || cur.done) return;
+      ticket += 1;
+      clearTimer();
+      try { audio.pause(); } catch (e) { /* noop */ }
+      pi += 1;
+      tryCurrent();
+    }
     function succeed() {
       if (finished || cur.done) return;
       finished = true;
-      cleanup();
+      cleanup();               // 摘掉监听；但不 pause，让这一句自然读完
       cur.started = true;
+      cur.keepPlaying = true;  // settle 里据此跳过 pause
       cur.voiceName = '在线发音';
       settle(cur, true, 'online', true);
     }
@@ -346,60 +347,39 @@
       try { audio.pause(); } catch (e) { /* noop */ }
       settle(cur, false, 'online-failed');
     }
-    /** 播放当前块的当前备选源；失败就换源，整块失败就跳到下一块。 */
     function tryCurrent() {
       if (finished || cur.done) return;
-      if (ci >= chunks.length) { if (played) succeed(); else giveUp(); return; }
-      var urls = chunkUrls(chunks[ci]);
-      if (pi >= urls.length) { ci += 1; pi = 0; tryCurrent(); return; }
+      if (pi >= urls.length) { giveUp(); return; }
       var url = urls[pi];
       var my = ++ticket;
-      started = false;
-      activeUrl = url;
-      try { audio.src = url; } catch (e) { pi += 1; tryCurrent(); return; }
+      try { audio.src = url; } catch (e) { next(); return; }
       var p = null;
       try { p = audio.play(); } catch (e) { /* 由 onerror / 超时兜底 */ }
       if (p && typeof p.catch === 'function') {
         p.catch(function () {
           if (finished || cur.done || my !== ticket) return;
-          ticket += 1;
-          clearTimer();
-          pi += 1;
-          tryCurrent();
+          next();
         });
       }
+      // 迟迟没有真正出声就换下一个源；不再依赖 onended（206 流式响应可能永不触发）
       timer = setTimeout(function () {
-        if (finished || cur.done || started || my !== ticket) return;
-        ticket += 1;
-        try { audio.pause(); } catch (e) { /* noop */ }
-        pi += 1;
-        tryCurrent();
-      }, 5000);
+        if (finished || cur.done || my !== ticket) return;
+        next();
+      }, 6000);
     }
-    function isCurrentSrc() {
-      try { return audio.src === activeUrl; } catch (e) { return true; }
+    // 静音解锁片段（data: URI）可能残留事件，只接受 http(s) 源的事件
+    function isRealSrc() {
+      try { return /^https?:/i.test(audio.src); } catch (e) { return true; }
     }
     audio.onplaying = function () {
-      if (finished || cur.done || !isCurrentSrc()) return;
-      started = true;
-      clearTimer();
+      if (finished || cur.done || !isRealSrc()) return;
       cur.started = true;
       if (cur.options.onStart) cur.options.onStart();
-    };
-    audio.onended = function () {
-      if (finished || cur.done || !isCurrentSrc()) return;
-      clearTimer();
-      played += 1;
-      ticket += 1;
-      ci += 1; pi = 0;
-      tryCurrent();
+      succeed();
     };
     audio.onerror = function () {
-      if (finished || cur.done || !isCurrentSrc()) return;
-      clearTimer();
-      ticket += 1; // 让随后可能到达的 play() reject 失效
-      pi += 1;
-      tryCurrent();
+      if (finished || cur.done || !isRealSrc()) return;
+      next();
     };
     tryCurrent();
   }
@@ -410,7 +390,8 @@
     if (cur.options.online === false) { settle(cur, false, reason); return; }
     if (inGesture()) {
       localFailures += 1;
-      if (localFailures >= 2) localBroken = true;
+      // 本地引擎一旦失败过，本会话后续点击直接走在线 MP3，不再让用户干等
+      if (localFailures >= 1) localBroken = true;
     }
     playOnline(cur);
   }
@@ -536,7 +517,7 @@
       paused: synthesis ? !!synthesis.paused : false,
       localBroken: localBroken,
       online: typeof global.Audio !== 'undefined',
-      primed: !!primedAudio,
+      primed: !!unlockAudio,
       autoVoice: autoVoice(),
       status: { ok: lastStatus.ok, voice: lastStatus.voice, attempts: lastStatus.attempts, reason: lastStatus.reason, fallback: lastStatus.fallback }
     };

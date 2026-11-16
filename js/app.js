@@ -1951,8 +1951,8 @@
     var r = (res && res.reason) || 'unknown';
     if (r === 'not-allowed') return '浏览器拦截了自动朗读（新域名首次打开常见）：点下方「开启发音」一次即可，之后全程自动播放；若仍无声请检查站点声音权限';
     if (r === 'unsupported') return '当前浏览器不支持语音合成，建议改用 Chrome 打开';
-    if (r === 'online-failed') return '这次没放出声音：应用里无需设置，点下方「开启发音」再试一次即可。若仍无声，请在浏览器地址栏左侧图标 →「网站设置」→「声音」选「允许」（Safari：设置 → 网站 → 自动播放 → 允许全部），并暂时关闭广告拦截插件；系统音量与输出设备也确认一下。';
-    if (r === 'no-start' || r === 'stalled') return '本地朗读没有启动，已自动尝试在线发音；仍无声请点「开启发音」再试一次，并检查站点声音权限与网络';
+    if (r === 'online-failed') return '在线发音这次没加载出来，应用里无需设置：点下方「点一下重播」再试一次即可。若反复失败，多半是网络或广告拦截插件挡住了发音接口（有道 / 百度 / Google），暂时关掉插件或换个网络再试；也顺手确认系统音量与输出设备。';
+    if (r === 'no-start' || r === 'stalled') return '本地音色没启动，已自动改播在线发音；仍无声请点「点一下重播」再试一次';
     if (r === 'interrupted') return '朗读被打断了，再点一次播放即可';
     if (r === 'language-unavailable' || r === 'voice-unavailable') return '当前音色不可用，请在「发音设置」里换一个英语音色';
     return '朗读未完成（' + r + '），可在「发音设置」里换音色再试';
@@ -2054,7 +2054,7 @@
     else if (!d.english) advice = '没有英语音色，中文音色读英文可能不出声。请在下方音色列表里手动选一个，或改用 Chrome。';
     else if (d.paused) advice = '语音引擎处于暂停状态，点「重置语音引擎」后再试听。';
     else if (d.status && d.status.reason === 'not-allowed') advice = '浏览器拦截了自动朗读：新域名第一次打开、或刚刷新页面时必须先有一次点击。页面上会出现「开启发音」按钮，点一次即可解锁；若仍无声，请检查该站点的声音权限（Chrome 按域名分别记忆，localhost 允许不代表线上域名允许）。';
-    else if (d.status && d.status.reason === 'online-failed') advice = '在线发音也没放出声音，通常是浏览器拦了声音而不是应用坏了：应用里无需任何设置，先点页面上的「点一下重播」；若仍无声，在 Chrome/Edge 地址栏左侧图标 →「网站设置」→「声音」选「允许」（Safari：设置 → 网站 → 自动播放 → 允许全部），并暂时关闭广告拦截插件，同时确认系统音量与输出设备。三个在线来源本身可访问，不用换音色、不用配网络。';
+    else if (d.status && d.status.reason === 'online-failed') advice = '三个在线发音源这次都没加载出来：先点页面上的「点一下重播」再试一次。若反复失败，通常是网络不通、公司代理或广告拦截插件挡住了有道 / 百度 / Google 的发音接口；暂时关掉插件或换个网络即可。应用内部无需任何设置，也不用换音色。';
     else if (d.localBroken) advice = '本地语音引擎连续启动失败，已自动改为在线发音（需要网络，点击即出声）。点「重置语音引擎」可以再试一次本地音色。';
     else if (d.status && d.status.fallback) advice = '上一次本地引擎没启动，已自动用在线发音播出。属正常兜底，不影响练习；想用本地音色可点「重置语音引擎」再试听。';
     else if (d.status && (d.status.reason === 'no-start' || d.status.reason === 'stalled')) advice = '朗读没启动。先点「测设备音量」：听得到说明设备正常、是语音引擎卡住，点「重置语音引擎」再试；听不到就是系统静音或浏览器音频被禁用。';
