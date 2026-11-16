@@ -174,6 +174,45 @@
     return Math.abs(h);
   }
 
+  /** 真实录音里几乎没有任何有效声音（没开口 / 麦克风被静音）。 */
+  function isSilent(metrics) {
+    if (!metrics || metrics.simulated) return false;
+    var voiced = typeof metrics.voicedRatio === 'number' ? metrics.voicedRatio : null;
+    var peak = typeof metrics.peakLevel === 'number' ? metrics.peakLevel : null;
+    var avg = typeof metrics.avgLevel === 'number' ? metrics.avgLevel : null;
+    if (voiced === null && peak === null && avg === null) return false;
+    if (voiced !== null && voiced >= 0.02) return false;
+    if (peak !== null && peak >= 0.08) return false;
+    if (avg !== null && avg >= 0.03) return false;
+    return true;
+  }
+
+  /** 没有识别到发音时返回「不计分」结果：0 分、0 XP、0 星，界面引导重新录音。
+   *  曾经这里会编造一个 74~94 的分数，导致「什么都没说也能拿 75 分」。 */
+  function noSpeechResult(sentence, metrics, reason) {
+    var refWords = tokenize(sentence.en);
+    var words = refWords.map(function (w) { return { text: w, status: 'missing', heard: null }; });
+    return {
+      total: 0,
+      accuracy: 0,
+      fluency: 0,
+      completeness: 0,
+      stars: 0,
+      words: words,
+      transcript: '',
+      alternatives: [],
+      fluencyDetail: computeFluency(metrics || {}, refWords.length),
+      diagnose: [],
+      demo: false,
+      noSpeech: true,
+      noSpeechReason: reason || 'no-transcript',
+      sentence: sentence,
+      metrics: metrics || {},
+      reward: { xp: 0, baseXp: 0, combo: 0, multiplier: 1, comboBonus: 0 },
+      xp: 0, combo: 0, multiplier: 1, comboBonus: 0
+    };
+  }
+
   function demoResult(sentence, metrics, prevCombo) {
     var refWords = tokenize(sentence.en);
     var seed = hashCode(sentence.id + '|' + Date.now());
@@ -209,7 +248,8 @@
 
   /**
    * 评分主入口
-   * @param {object} input {sentence, transcript, alternatives, metrics}
+   * @param {object} input {sentence, transcript, alternatives, metrics, combo, allowDemo}
+   *  allowDemo 仅用于用户主动开启的「体验模式」；真实录音没有识别文本时绝不编造分数。
    */
   function score(input) {
     var sentence = input.sentence;
@@ -220,7 +260,12 @@
     if (input.transcript && candidates.indexOf(input.transcript) === -1) candidates.unshift(input.transcript);
     candidates = candidates.filter(function (c) { return normalize(c).length > 0; });
 
-    if (!candidates.length) return demoResult(sentence, metrics, input.combo);
+    if (!candidates.length) {
+      if (input.allowDemo) return demoResult(sentence, metrics, input.combo);
+      return noSpeechResult(sentence, metrics, metrics.simulated ? 'recorder-unavailable' : 'no-transcript');
+    }
+    // 有文本但录音几乎是静音：多半是识别器误触发，同样不计分
+    if (isSilent(metrics)) return noSpeechResult(sentence, metrics, 'silence');
 
     var best = null;
     candidates.forEach(function (candidate) {
@@ -273,6 +318,8 @@
     tokenize: tokenize,
     align: align,
     similarity: similarity,
+    isSilent: isSilent,
+    noSpeechResult: noSpeechResult,
     starsFor: starsFor
   };
 })(window);

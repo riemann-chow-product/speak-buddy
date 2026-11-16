@@ -1,9 +1,12 @@
 /* SpeakBuddy - 语音合成 (TTS) 与语音识别 (ASR) 封装
  *
- * TTS 卡顿的三类根因与对应处理：
- *  1. Chrome 下 cancel() 与 speak() 连续调用是竞态，会吞掉新句子的首音节 → 中间留出间隔；
- *  2. 在线音色（localService=false）需要联网取音频，遇到网络抖动会断流/卡顿 → 优先本地音色；
- *  3. 部分音色在非 1.0 语速下播放不连续、或说完后 synthesis 卡在 paused → 看门狗 + 自动重试。
+ * 朗读「点了没声音」的三类根因与对应处理：
+ *  1. Chrome 下 cancel() 与 speak() 紧挨着调用是竞态，新句子会永远不触发 onstart
+ *     → 首次朗读在用户手势里同步 speak，之前不再 cancel；重试时才提前 cancel 并留出间隔；
+ *  2. 在线音色（localService=false）/ 失效的音色对象会让 speak() 静默卡住
+ *     → 自动选本地音色；第二次尝试不再指定音色，交给浏览器默认引擎；
+ *  3. 部分浏览器压根不提供语音合成，或引擎被自动播放策略拦住
+ *     → 本地引擎失败后自动改播在线 MP3，保证「点一下就有声音」。
  */
 (function (global) {
   'use strict';
@@ -16,13 +19,16 @@
   var cachedVoices = [];
 
   var TTS_KEY = 'speakbuddy.tts.v1';
-  var settings = { voiceURI: '', voiceName: '', rate: 0.92 };
+  // auto=true 时系统自动挑选并保存一个本地英语音色（用户仍可在设置里手动改）
+  var settings = { voiceURI: '', voiceName: '', rate: 0.92, auto: true };
   try {
     var savedTts = JSON.parse(global.localStorage.getItem(TTS_KEY) || 'null');
     if (savedTts) {
       if (typeof savedTts.voiceURI === 'string') settings.voiceURI = savedTts.voiceURI;
       if (typeof savedTts.voiceName === 'string') settings.voiceName = savedTts.voiceName;
       if (typeof savedTts.rate === 'number' && savedTts.rate >= 0.5 && savedTts.rate <= 1.4) settings.rate = savedTts.rate;
+      // 兼容旧存档：存过音色就视为手动选择，否则按「自动」处理
+      settings.auto = typeof savedTts.auto === 'boolean' ? savedTts.auto : !settings.voiceURI;
     }
   } catch (e) { /* 隐私模式下忽略 */ }
 
@@ -34,17 +40,23 @@
   var current = null;
   var warmedUp = false;
   var unlocked = false; // 本次文档里是否已有过一次成功朗读
-  var lastStatus = { ok: false, voice: '', attempts: 0, reason: '' };
+  var lastStatus = { ok: false, voice: '', attempts: 0, reason: '', fallback: false };
+  var localFailures = 0;   // 连续「本地引擎启动失败」次数
+  var localBroken = false; // 本次会话内直接走在线发音，避免每次点击都白等
 
   /* ---------------- 音色 ---------------- */
   function refreshVoices() {
     if (!synthesis) return;
-    var list = synthesis.getVoices() || [];
-    if (list.length) cachedVoices = list;
+    try {
+      var list = synthesis.getVoices() || [];
+      if (list.length) cachedVoices = list;
+    } catch (e) { /* noop */ }
   }
   if (synthesis) {
     refreshVoices();
-    if ('onvoiceschanged' in synthesis) synthesis.onvoiceschanged = refreshVoices;
+    if ('onvoiceschanged' in synthesis) {
+      synthesis.onvoiceschanged = function () { refreshVoices(); ensureVoice(); };
+    }
   }
 
   function englishVoices() {
@@ -59,8 +71,9 @@
     if (/en[-_]US/i.test(v.lang)) q += 30;
     else if (/en[-_]GB/i.test(v.lang)) q += 20;
     else if (/^en/i.test(v.lang)) q += 10;
-    if (/Samantha|Alex|Daniel|Ava|Allison|Susan|Fred|Microsoft (Aria|Zira|Jenny|Guy)|Google US English/i.test(n)) q += 10;
-    if (/compact|eloquence|novelty|Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|Good News|Jester|Organ|Superstar|Whisper|Wobble|Zarvox/i.test(n)) q -= 60;
+    if (/Samantha|Alex|Ava|Allison|Susan|Daniel|Karen|Moira|Tessa|Microsoft (Aria|Zira|Jenny|Guy)|Google US English/i.test(n)) q += 25;
+    // macOS / Chrome 里的搞怪音色（Fred、Eddy、Grandma…）读句子很怪，不适合当标准发音
+    if (/Fred|Eddy|Flo|Grandma|Grandpa|Junior|Reed|Rocko|Shelley|compact|eloquence|novelty|Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|Good News|Jester|Organ|Superstar|Whisper|Wobble|Zarvox/i.test(n)) q -= 60;
     if (/(中文|Chinese|Mandarin|Cantonese)/i.test(n)) q -= 40;
     return q;
   }
@@ -69,17 +82,37 @@
     return englishVoices().slice().sort(function (a, b) { return quality(b) - quality(a); });
   }
 
-  /** attempt > 1 时换一个音色，避免同一个有问题的音色反复重试。 */
-  function pickVoice(attempt) {
+  /** 自动模式：把排名最高的（优先本地）英语音色写进设置，界面能直接看到「当前音色」。 */
+  function ensureVoice() {
+    if (!settings.auto) return;
+    var list = rankedVoices();
+    if (!list.length) return;
+    var best = list[0];
+    if (settings.voiceURI !== (best.voiceURI || '') || settings.voiceName !== (best.name || '')) {
+      settings.voiceURI = best.voiceURI || '';
+      settings.voiceName = best.name || '';
+      saveSettings();
+    }
+  }
+
+  function autoVoice() {
     var list = rankedVoices();
     if (!list.length) return null;
-    if (attempt <= 1 && settings.voiceURI) {
+    var v = list[0];
+    return { name: v.name || '', lang: v.lang || '', local: v.localService === true };
+  }
+  ensureVoice();
+
+  /** 第一次用保存的音色；重试时返回 null，不再指定音色，交给浏览器默认引擎。 */
+  function pickVoice(attempt) {
+    var list = rankedVoices();
+    if (!list.length || attempt > 1) return null;
+    if (settings.voiceURI) {
       for (var i = 0; i < list.length; i++) {
         if (list[i].voiceURI === settings.voiceURI || list[i].name === settings.voiceName) return list[i];
       }
     }
-    var idx = attempt > 1 ? 1 : 0;
-    return list[Math.min(idx, list.length - 1)] || list[0];
+    return list[0];
   }
 
   /** 首次用户手势预热：只加载音色列表并 resume，绝不往队列塞空句子。
@@ -87,7 +120,7 @@
   function warmUp() {
     if (warmedUp || !synthesis) return;
     warmedUp = true;
-    try { refreshVoices(); } catch (e) { /* noop */ }
+    try { refreshVoices(); ensureVoice(); } catch (e) { /* noop */ }
     try { if (synthesis.paused) synthesis.resume(); } catch (e) { /* noop */ }
   }
   if (doc) {
@@ -121,15 +154,16 @@
     if (cur.interval) { clearInterval(cur.interval); cur.interval = null; }
   }
 
-  function settle(cur, ok, reason) {
+  function settle(cur, ok, reason, fallback) {
     if (!cur || cur.done) return;
     cur.done = true;
     clearAttempt(cur);
     detachUtter(cur);
+    if (cur.audio) { try { cur.audio.pause(); } catch (e) { /* noop */ } cur.audio = null; }
     if (current === cur) current = null;
     if (ok) unlocked = true;
-    lastStatus = { ok: ok, voice: cur.voiceName, attempts: cur.attempts, reason: reason || '' };
-    cur.resolve({ ok: ok, voice: cur.voiceName, attempts: cur.attempts, reason: reason || '' });
+    lastStatus = { ok: !!ok, voice: cur.voiceName, attempts: cur.attempts, reason: reason || '', fallback: !!fallback };
+    cur.resolve({ ok: !!ok, voice: cur.voiceName, attempts: cur.attempts, reason: reason || '', fallback: !!fallback });
   }
 
   /** cancel() 会让仍在队列里的 utterance 抛 onerror('interrupted')。
@@ -141,9 +175,12 @@
     cur.utter = null;
   }
 
-  function safeCancel(cur) {
+  function safeCancel(cur, force) {
     if (cur) detachUtter(cur);
-    try { synthesis.cancel(); } catch (e) { /* noop */ }
+    try {
+      // 只在确实有音频在播/排队（或强制）时 cancel，避免无谓的 cancel→speak 竞态
+      if (synthesis && (force || synthesis.speaking || synthesis.pending)) synthesis.cancel();
+    } catch (e) { /* noop */ }
   }
 
   function abortCurrent() {
@@ -154,22 +191,22 @@
 
   function retry(cur, reason) {
     if (cur.done || cur.token !== tokenSeq) return;
-    if (cur.attempts >= 2) { settle(cur, false, reason); return; }
+    if (cur.attempts >= 2) { failOrFallback(cur, reason); return; }
     clearAttempt(cur);
     cur.started = false;
-    safeCancel(cur);
-    // 重试时换音色 + 恢复常速，绕开「语速/音色组合导致的断流」
-    var t = setTimeout(function () { startAttempt(cur); }, 160);
+    safeCancel(cur, true);
+    // 提前 cancel 并留出一拍，避开 Chrome 的 cancel/speak 竞态
+    var t = setTimeout(function () { startAttempt(cur); }, 180);
     cur.timers.push(t);
   }
 
   function startAttempt(cur) {
     if (cur.done || cur.token !== tokenSeq) return;
     cur.attempts += 1;
-    safeCancel(cur);
-    // cancel 是异步的，紧接着 speak 会丢首音节；等一小拍再真正说话
-    var t = setTimeout(function () { doSpeak(cur); }, cur.attempts > 1 ? 90 : 30);
-    cur.timers.push(t);
+    // 关键：这里不再 cancel。Chrome 下 cancel() 紧接 speak() 会让新句子永远不触发
+    // onstart（正是「朗读没有启动」的主因）；重试时已在 retry() 里提前 cancel 过。
+    try { if (synthesis.paused) synthesis.resume(); } catch (e) { /* noop */ }
+    doSpeak(cur);
   }
 
   function doSpeak(cur) {
@@ -196,13 +233,16 @@
       if (cur.options.onStart) cur.options.onStart();
     };
     u.onboundary = function () { cur.lastBoundary = Date.now(); };
-    u.onend = function () { settle(cur, true, 'end'); };
+    u.onend = function () {
+      localFailures = 0;
+      settle(cur, true, 'end');
+    };
     u.onerror = function (ev) {
       var err = (ev && ev.error) || 'unknown';
       if (err === 'interrupted' || err === 'canceled') { settle(cur, false, err); return; }
-      // 自动播放策略 / 音色不可用：重试也只会再被拒一次，直接把原因交给界面提示
+      // 自动播放策略 / 音色不可用：重试也只会再被拒一次，交给在线发音兜底
       if (err === 'not-allowed' || err === 'language-unavailable' || err === 'voice-unavailable') {
-        settle(cur, false, err); return;
+        failOrFallback(cur, err); return;
       }
       retry(cur, err);
     };
@@ -213,7 +253,7 @@
     cur.timers.push(setTimeout(function () {
       if (cur.done) return;
       if (!cur.started) retry(cur, 'no-start');
-    }, 1800));
+    }, attempt > 1 ? 1200 : 1000));
 
     var maxMs = expectedMs(cur.text, rate) + 5000;
     cur.interval = setInterval(function () {
@@ -226,41 +266,167 @@
     }, 700);
   }
 
+  /* ---------------- 在线发音兜底 ----------------
+   * 本地引擎起不来时，用 <audio> 播放在线 MP3。英语句子是内置的固定内容，
+   * 只把句子文本发给第三方朗读服务，不上传任何录音或用户数据。
+   * 有道发音在国内可直连，但它是「词典发音」，一次最多约 7 个词，长句会返回
+   * 500「returned null audio」；因此按 ≤6 词切块顺序播放，并给每块准备多个备选源，
+   * 任何一个源出声即可，保证「点一下就有声音」。 */
+  function splitForTTS(text) {
+    var words = String(text).split(/\s+/).filter(Boolean);
+    if (!words.length) return [String(text)];
+    var chunks = [], cur = [];
+    words.forEach(function (w) {
+      cur.push(w);
+      if (cur.length >= 6) { chunks.push(cur.join(' ')); cur = []; }
+    });
+    if (cur.length) chunks.push(cur.join(' '));
+    return chunks;
+  }
+
+  function chunkUrls(chunk) {
+    // encodeURIComponent 不转义单引号，个别服务遇到裸引号会报错，统一补成 %27
+    var q = encodeURIComponent(chunk).replace(/'/g, '%27');
+    return [
+      'https://dict.youdao.com/dictvoice?audio=' + q + '&le=en',
+      'https://fanyi.baidu.com/gettts?lan=en&text=' + q + '&spd=3&source=web',
+      'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=' + q
+    ];
+  }
+
+  function playOnline(cur) {
+    if (typeof global.Audio === 'undefined') { settle(cur, false, 'online-failed'); return; }
+    cur.attempts = Math.max(cur.attempts, 1);
+    var chunks = splitForTTS(cur.text);
+    var audio = new global.Audio();
+    audio.preload = 'auto';
+    cur.audio = audio;
+    var ci = 0, pi = 0, finished = false, started = false, played = 0;
+    var timer = null, ticket = 0;
+
+    function clearTimer() { if (timer) { clearTimeout(timer); timer = null; } }
+    function cleanup() {
+      clearTimer();
+      audio.onended = null; audio.onerror = null; audio.onplaying = null;
+    }
+    function succeed() {
+      if (finished || cur.done) return;
+      finished = true;
+      cleanup();
+      cur.started = true;
+      cur.voiceName = '在线发音';
+      settle(cur, true, 'online', true);
+    }
+    function giveUp() {
+      if (finished || cur.done) return;
+      finished = true;
+      cleanup();
+      try { audio.pause(); } catch (e) { /* noop */ }
+      settle(cur, false, 'online-failed');
+    }
+    /** 播放当前块的当前备选源；失败就换源，整块失败就跳到下一块。 */
+    function tryCurrent() {
+      if (finished || cur.done) return;
+      if (ci >= chunks.length) { if (played) succeed(); else giveUp(); return; }
+      var urls = chunkUrls(chunks[ci]);
+      if (pi >= urls.length) { ci += 1; pi = 0; tryCurrent(); return; }
+      var url = urls[pi];
+      var my = ++ticket;
+      started = false;
+      try { audio.src = url; } catch (e) { pi += 1; tryCurrent(); return; }
+      var p = null;
+      try { p = audio.play(); } catch (e) { /* 由 onerror / 超时兜底 */ }
+      if (p && typeof p.catch === 'function') {
+        p.catch(function () {
+          if (finished || cur.done || my !== ticket) return;
+          ticket += 1;
+          clearTimer();
+          pi += 1;
+          tryCurrent();
+        });
+      }
+      timer = setTimeout(function () {
+        if (finished || cur.done || started || my !== ticket) return;
+        ticket += 1;
+        try { audio.pause(); } catch (e) { /* noop */ }
+        pi += 1;
+        tryCurrent();
+      }, 5000);
+    }
+    audio.onplaying = function () {
+      if (finished || cur.done) return;
+      started = true;
+      clearTimer();
+      cur.started = true;
+      if (cur.options.onStart) cur.options.onStart();
+    };
+    audio.onended = function () {
+      if (finished || cur.done) return;
+      clearTimer();
+      played += 1;
+      ticket += 1;
+      ci += 1; pi = 0;
+      tryCurrent();
+    };
+    audio.onerror = function () {
+      if (finished || cur.done) return;
+      clearTimer();
+      ticket += 1; // 让随后可能到达的 play() reject 失效
+      pi += 1;
+      tryCurrent();
+    };
+    tryCurrent();
+  }
+
+  function failOrFallback(cur, reason) {
+    if (cur.done || cur.token !== tokenSeq) return;
+    safeCancel(cur, true); // 停掉可能迟到的本地句子，避免和在线音频叠在一起
+    if (cur.options.online === false) { settle(cur, false, reason); return; }
+    if (inGesture()) {
+      localFailures += 1;
+      if (localFailures >= 2) localBroken = true;
+    }
+    playOnline(cur);
+  }
+
   /* ---------------- 自动播放解锁状态 ----------------
    * Chrome / Edge 对 speechSynthesis 同样套用 autoplay policy：文档一次用户激活
    * 都没有时，speak() 会直接触发 onerror('not-allowed')，一句都不读。
-   * 这个许可是「按文档 + 按 origin」的：刷新页面清零，新域名也没有媒体互动
-   * 指数（MEI）累积，所以线上首次访问的自动朗读会稳定落在这个空窗里。
-   * 而一次带手势的成功朗读之后，同文档内后续朗读都会放行（sticky activation）。
+   * 一次带手势的成功朗读之后，同文档内后续朗读都会放行（sticky activation）。
    */
-  function hasGesture() {
+  function inGesture() {
     try {
       var ua = global.navigator && global.navigator.userActivation;
-      if (ua && typeof ua.hasBeenActive === 'boolean') return ua.hasBeenActive;
+      if (ua) {
+        if (typeof ua.isActive === 'boolean' && ua.isActive) return true;
+        if (typeof ua.hasBeenActive === 'boolean') return ua.hasBeenActive;
+      }
     } catch (e) { /* noop */ }
     return unlocked;
   }
+  function hasGesture() { return inGesture(); }
   function needsGesture() { return !unlocked && !hasGesture(); }
   function isUnlocked() { return unlocked; }
 
   /** 线上首次加载时 getVoices() 往往还是空的（实测 0 → 199 需要几百毫秒），
-   *  这时朗读会退回系统默认音色，容易落到需要联网的在线音色上而断流。 */
+   *  只有这时才等待音色；否则朗读会丢掉用户手势（Safari 尤其严格）。 */
   function waitVoices(cur, tries) {
     if (cur.done || cur.token !== tokenSeq) return;
     refreshVoices();
-    if ((cachedVoices.length && englishVoices().length) || tries >= 6) {
-      cur.timers.push(setTimeout(function () { startAttempt(cur); }, 70));
+    ensureVoice();
+    if ((cachedVoices.length && englishVoices().length) || tries >= 8) {
+      cur.timers.push(setTimeout(function () { startAttempt(cur); }, 50));
       return;
     }
     cur.timers.push(setTimeout(function () { waitVoices(cur, tries + 1); }, 120));
   }
 
-  /** 朗读英文。返回 Promise<{ok, voice, attempts, reason}>，结束后 resolve。 */
+  /** 朗读英文。返回 Promise<{ok, voice, attempts, reason, fallback}>，结束后 resolve。 */
   function speak(text, options) {
     options = options || {};
     var clean = cleanText(text);
     return new Promise(function (resolve) {
-      if (!synthesis || !Utterance || !clean) { resolve({ ok: false, voice: '', attempts: 0, reason: 'unsupported' }); return; }
+      if (!clean) { resolve({ ok: false, voice: '', attempts: 0, reason: 'empty', fallback: false }); return; }
       abortCurrent();
       var cur = {
         token: ++tokenSeq,
@@ -270,17 +436,27 @@
         attempts: 0,
         done: false,
         started: false,
-        startTime: 0,
-        lastBoundary: 0,
+        startTime: Date.now(),
+        lastBoundary: Date.now(),
         timers: [],
         interval: null,
+        audio: null,
         voiceName: '',
         utter: null
       };
       current = cur;
-      cur.startTime = Date.now();
-      // 等音色列表就绪、并与上一次 cancel 拉开距离，避免首音节被吞
-      waitVoices(cur, 0);
+      warmUp();
+      refreshVoices();
+      ensureVoice();
+
+      // 本地引擎连续失败过 / 浏览器不提供语音合成 → 直接在线发音，点击立刻出声
+      if (localBroken || !synthesis || !Utterance) {
+        if (options.online === false) { settle(cur, false, localBroken ? 'no-start' : 'unsupported'); return; }
+        playOnline(cur);
+        return;
+      }
+      if (!cachedVoices.length || !englishVoices().length) waitVoices(cur, 0);
+      else startAttempt(cur); // 在用户手势的同一调用栈里同步 speak
     });
   }
 
@@ -288,11 +464,22 @@
 
   /* ---------------- 设置 ---------------- */
   function getSettings() {
-    return { voiceURI: settings.voiceURI, voiceName: settings.voiceName, rate: settings.rate, status: lastStatus };
+    return {
+      voiceURI: settings.voiceURI, voiceName: settings.voiceName,
+      rate: settings.rate, auto: settings.auto, autoVoice: autoVoice(), status: lastStatus
+    };
   }
   function setVoice(voiceURI, voiceName) {
-    settings.voiceURI = voiceURI || '';
-    settings.voiceName = voiceName || '';
+    if (voiceURI) {
+      settings.auto = false;
+      settings.voiceURI = voiceURI;
+      settings.voiceName = voiceName || '';
+    } else {
+      settings.auto = true;
+      settings.voiceURI = '';
+      settings.voiceName = '';
+      ensureVoice();
+    }
     saveSettings();
     return getSettings();
   }
@@ -320,7 +507,10 @@
       speaking: synthesis ? !!synthesis.speaking : false,
       pending: synthesis ? !!synthesis.pending : false,
       paused: synthesis ? !!synthesis.paused : false,
-      status: { ok: lastStatus.ok, voice: lastStatus.voice, attempts: lastStatus.attempts, reason: lastStatus.reason }
+      localBroken: localBroken,
+      online: typeof global.Audio !== 'undefined',
+      autoVoice: autoVoice(),
+      status: { ok: lastStatus.ok, voice: lastStatus.voice, attempts: lastStatus.attempts, reason: lastStatus.reason, fallback: lastStatus.fallback }
     };
   }
 
@@ -328,12 +518,15 @@
   function resetEngine() {
     try {
       if (current) settle(current, false, 'interrupted');
-      safeCancel(null);
+      safeCancel(null, true);
     } catch (e) { /* noop */ }
+    localFailures = 0;
+    localBroken = false;
     try {
       if (synthesis) {
         if (synthesis.paused) synthesis.resume();
         refreshVoices();
+        ensureVoice();
       }
     } catch (e) { /* noop */ }
     return diagnostics();

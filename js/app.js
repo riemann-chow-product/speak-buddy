@@ -488,8 +488,16 @@
         transcript: rec && rec.transcript,
         alternatives: rec && rec.alternatives,
         metrics: metrics,
-        combo: 0
+        combo: 0,
+        allowDemo: !!state.demoMode
       });
+      // 没识别到发音不参与定级，也不给分，留在本题重新录音
+      if (result.noSpeech) {
+        a.phase = 'result';
+        a.ending = false;
+        showAssessScore(result);
+        return;
+      }
       SB.assessment.applySpeaking(a.engine, a.item, result);
       a.lastScore = result.total;
       a.phase = 'result';
@@ -501,6 +509,7 @@
   function showAssessScore(result) {
     var box = doc.getElementById('assess-result');
     if (!box) return;
+    if (result.noSpeech) { box.innerHTML = noSpeechHTML(result, 'assess-retry'); updateAssessRecordUI(); return; }
     var word = result.total >= 85 ? '很稳！' : result.total >= 70 ? '不错，继续' : '再练练会更好';
     box.innerHTML = '<div class="assess-score">' +
       '<div class="assess-score-num">' + result.total + '</div>' +
@@ -908,6 +917,7 @@
   function dlgFeedbackHTML(d) {
     var r = d.lastResult;
     if (!r) return '';
+    if (r.noSpeech) return noSpeechHTML(r, 'dlg-retry', 'dlg-no-speech');
     var fd = r.fluencyDetail || {};
     var groups = r.groups.map(function (g) {
       return '<span class="dlg-group ' + (g.ok ? 'hit' : 'miss') + '">' + icon(g.ok ? 'check' : 'close', 11) + ' ' + esc(g.label) + '</span>';
@@ -1145,7 +1155,7 @@
     Promise.all([metricsP, recP]).then(function (arr) { evaluateDlgTurn(arr[0], arr[1]); });
   }
 
-  function evaluateDlgTurn(metrics, rec) {
+  function evaluateDlgTurn(metrics, rec, quickDemo) {
     var d = state.dialogue;
     if (!d || d.phase === 'done') return;
     var turn = dlgTurn();
@@ -1158,8 +1168,19 @@
       alternatives: alternatives,
       metrics: metrics || {},
       combo: dlgComboBefore(d.index),
-      fallback: !transcript
+      fallback: !transcript,
+      allowDemo: !!state.demoMode || !!quickDemo
     });
+    // 没识别到发音：不计分、不计入本场成绩，也不发奖励
+    if (result.noSpeech) {
+      d.results[d.index] = null;
+      d.lastResult = result;
+      d.phase = 'feedback';
+      d.ending = false;
+      renderView();
+      updateDlgUI();
+      return;
+    }
     d.results[d.index] = result;
     d.lastResult = result;
     d.messages.push({
@@ -1181,7 +1202,7 @@
     SB.speech.stopSpeaking();
     if (SB.recorder.isActive()) SB.recorder.cancel();
     toast('本轮按参考说法演示，计为体验评分（XP 减半）', 'warn');
-    evaluateDlgTurn({ duration: 2.2, avgLevel: 0.12, pauseCount: 0, pauseSeconds: 0, simulated: true, reason: '手动选择参考说法' }, null);
+    evaluateDlgTurn({ duration: 2.2, avgLevel: 0.12, pauseCount: 0, pauseSeconds: 0, simulated: true, reason: '手动选择参考说法' }, null, true);
   }
 
   function dlgRetry() {
@@ -1637,8 +1658,18 @@
         transcript: rec && rec.transcript,
         alternatives: rec && rec.alternatives,
         metrics: metrics,
-        combo: combo.combo
+        combo: combo.combo,
+        allowDemo: !!state.demoMode
       });
+      // 没识别到发音：不计分、不入账、不发奖励，只引导重新录一次
+      if (result.noSpeech) {
+        state.lastResult = result;
+        state.phase = 'result';
+        state.ending = false;
+        renderFeedback(result);
+        updatePracticeUI();
+        return;
+      }
       var reward = SB.store.recordSentence(result);
       state.lastResult = result;
       state.phase = 'result';
@@ -1679,9 +1710,28 @@
     return '别急，先听一遍再跟读';
   }
 
+  function noSpeechReasonText(reason) {
+    if (reason === 'recorder-unavailable') return '麦克风或浏览器语音识别不可用，这次没有采集到你的发音。';
+    if (reason === 'silence') return '录音里几乎听不到声音，可能是离麦克风太远、音量太小或被静音了。';
+    return '这次没有识别到英文发音（没开口、说得太轻，或语音识别服务没有返回结果）。';
+  }
+  /** 不说话就绝不给分：0 分、0 XP、0 星，并给出重新录音 / 体验模式两个出口。 */
+  function noSpeechHTML(result, retryAction, extraClass) {
+    return '<div class="no-speech ' + (extraClass || '') + '">' +
+      '<div class="no-speech-icon">' + icon('mic', 22) + '</div>' +
+      '<div class="no-speech-body"><h3>没有听到你的声音，本次不计分</h3>' +
+      '<p>' + esc(noSpeechReasonText(result.noSpeechReason)) + ' 本次不会获得分数、星星、连击和 XP。</p>' +
+      '<p class="no-speech-hint">请用正常音量把句子读完再点结束；若浏览器不支持语音识别，可开启「体验模式」用模拟评分体验完整流程。</p></div>' +
+      '<div class="action-row">' +
+      '<button class="btn btn-primary" data-action="' + retryAction + '">' + icon('refresh', 15) + ' 重新录音</button>' +
+      (state.demoMode ? '' : '<button class="btn btn-ghost" data-action="enable-demo">' + icon('play', 14) + ' 开启体验模式</button>') +
+      '</div></div>';
+  }
+
   function renderFeedback(result) {
     var slot = doc.getElementById('feedback-slot');
     if (!slot) return;
+    if (result.noSpeech) { slot.innerHTML = noSpeechHTML(result, 'retry'); return; }
     var d = result.fluencyDetail || {};
     var metrics = [
       { label: '准确度', v: Math.round(result.accuracy * 100), cls: '' },
@@ -1859,8 +1909,8 @@
       '每句结束立刻给分、逐词着色并播放反馈音；连续两句 80 分以上进入连击，XP 加成最高 ×2；每天 3 个小任务全部完成可开启宝箱，拿到 25–55 XP 的随机奖励；升级、成就、开箱都有全屏庆祝动画。<br>' +
       '<b style="color:var(--ink-2)">关于评分</b><br>' +
       '真实模式：浏览器调用语音识别返回文本，系统再做词级对齐，结合语速、停顿与音量给出三维评分。建议用 Chrome 通过 localhost / HTTPS 打开并允许麦克风。<br>' +
-      '体验模式：识别不可用、权限被拒或手动开启时自动启用，模拟数据演示完整流程并明确标注，XP 减半。<br>' +
-      '发音设置：顶栏耳机按钮可切换英语音色与语速、试听短句。系统优先使用本地音色（不依赖网络），并会在检测到朗读卡住时自动换音色、恢复常速重试一次；弹窗里能看到实际使用的音色与重试次数。<br>' +
+      '体验模式：由你在顶栏手动开启（也可在「未检测到声音」结果页一键开启），模拟数据演示完整流程并明确标注，XP 减半。没有识别到发音时不会自动给分。<br>' +
+      '发音设置：顶栏耳机按钮可切换英语音色与语速、试听短句。默认已自动选好本地音色，点「听标准发音」即可出声；本地引擎卡住时会自动重试，若仍不出声则自动改播在线 MP3，无需手动配置。弹窗里能看到实际使用的音色与重试次数。<br>' +
       '<b style="color:var(--ink-2)">下次进来，学习记录还在吗？</b><br>' +
       '在。进度自动保存在这台电脑的这个浏览器里（localStorage），不用登录、不上传服务器；同一浏览器、同一打开地址再来，兴趣、定级、关卡星数、XP、连击、对话成绩都会保留。<br>' +
       '但清除浏览器数据、无痕窗口、换浏览器 / 换电脑，或在「直接双击 index.html」与「localhost 网页」之间切换时会读不到（两者来源不同、数据不互通）。点右上角「我的学习记录」可以查看存档状态、导出 JSON 备份，换设备时用备份恢复即可。</div>';
@@ -1901,7 +1951,8 @@
     var r = (res && res.reason) || 'unknown';
     if (r === 'not-allowed') return '浏览器拦截了自动朗读（新域名首次打开常见）：点下方「开启发音」一次即可，之后全程自动播放；若仍无声请检查站点声音权限';
     if (r === 'unsupported') return '当前浏览器不支持语音合成，建议改用 Chrome 打开';
-    if (r === 'no-start' || r === 'stalled') return '朗读没有启动（已自动换音色重试）。可在顶栏「发音设置」里换一个本地音色';
+    if (r === 'online-failed') return '本地语音引擎和在线发音都没能播放，请检查网络连接与站点声音权限后重试';
+    if (r === 'no-start' || r === 'stalled') return '本地朗读没有启动，已自动尝试在线发音；仍无声请检查网络与站点声音权限';
     if (r === 'interrupted') return '朗读被打断了，再点一次播放即可';
     if (r === 'language-unavailable' || r === 'voice-unavailable') return '当前音色不可用，请在「发音设置」里换一个英语音色';
     return '朗读未完成（' + r + '），可在「发音设置」里换音色再试';
@@ -1951,6 +2002,7 @@
     if (el && el.parentNode) el.parentNode.removeChild(el);
   }
 
+  var onlineNotified = false;
   function speakText(text, rate, btn, quiet) {
     if (btn) btn.classList.add('playing');
     return SB.speech.speak(text, { rate: effectiveRate(rate) }).then(function (res) {
@@ -1959,10 +2011,18 @@
         var msg = ttsFailMessage(res);
         if (!quiet) toast(msg, 'warn');
         showTtsWarn(msg);
-        if (res && res.reason === 'not-allowed') showVoiceGate(text, '点一下开启发音');
+        if (res && (res.reason === 'not-allowed' ||
+            (res.reason === 'online-failed' && SB.speech.needsGesture()))) {
+          showVoiceGate(text, '点一下开启发音');
+        }
       } else {
         clearTtsWarn();
         clearVoiceGate();
+        // 本地引擎起不来时已自动改播在线 MP3，明确告知一次，避免用户以为还是坏了
+        if (res.fallback && !onlineNotified) {
+          onlineNotified = true;
+          if (!quiet) toast('本地发音引擎不可用，已自动切换为在线发音', 'success');
+        }
         // 只有真的播出来了才计入「听 1 次标准发音」任务
         if (state.route === 'practice') SB.store.markListen();
       }
@@ -1975,9 +2035,12 @@
     var engine = d.paused ? '已暂停' : d.speaking ? '正在播放' : d.pending ? '队列等待中' : '空闲';
     var last = d.status && d.status.attempts
       ? (d.status.ok ? '成功' : '失败 · ' + esc(d.status.reason)) : '尚未试听';
+    var auto = d.autoVoice ? d.autoVoice.name + (d.autoVoice.local ? ' · 本地' : '') : '暂无';
     var rows = [
       ['语音合成', d.supported ? '支持' : '不支持'],
       ['可用音色', d.voices + ' · 英语 ' + d.english + ' / 本地 ' + d.local],
+      ['自动选中', esc(auto)],
+      ['发音来源', d.localBroken ? '在线发音（自动兜底）' : '本地语音引擎'],
       ['引擎状态', engine],
       ['上次朗读', last]
     ];
@@ -1987,9 +2050,11 @@
     else if (!d.english) advice = '没有英语音色，中文音色读英文可能不出声。请在下方音色列表里手动选一个，或改用 Chrome。';
     else if (d.paused) advice = '语音引擎处于暂停状态，点「重置语音引擎」后再试听。';
     else if (d.status && d.status.reason === 'not-allowed') advice = '浏览器拦截了自动朗读：新域名第一次打开、或刚刷新页面时必须先有一次点击。页面上会出现「开启发音」按钮，点一次即可解锁；若仍无声，请检查该站点的声音权限（Chrome 按域名分别记忆，localhost 允许不代表线上域名允许）。';
+    else if (d.localBroken) advice = '本地语音引擎连续启动失败，已自动改为在线发音（需要网络，点击即出声）。点「重置语音引擎」可以再试一次本地音色。';
+    else if (d.status && d.status.fallback) advice = '上一次本地引擎没启动，已自动用在线发音播出。属正常兜底，不影响练习；想用本地音色可点「重置语音引擎」再试听。';
     else if (d.status && (d.status.reason === 'no-start' || d.status.reason === 'stalled')) advice = '朗读没启动。先点「测设备音量」：听得到说明设备正常、是语音引擎卡住，点「重置语音引擎」再试；听不到就是系统静音或浏览器音频被禁用。';
     else if (d.status && d.status.attempts && !d.status.ok) advice = esc(ttsFailMessage(d.status));
-    else advice = '引擎看起来正常。选一个带「本地」的英语音色，再点「播放试听」；如果仍没声音，先点「测设备音量」确认设备能出声。';
+    else advice = '引擎看起来正常，已自动选好本地英语音色。点「播放试听」应该立刻出声；如果仍没声音，先点「测设备音量」确认设备能出声，系统会自动切换到在线发音。';
     return '<div class="tts-diag-grid">' + rows.map(function (r) {
       return '<div><span>' + r[0] + '</span><b>' + r[1] + '</b></div>';
     }).join('') + '</div>' +
@@ -2004,8 +2069,10 @@
   function showTtsModal() {
     var s = SB.speech.settings();
     var list = SB.speech.voiceList();
-    var options = '<option value="">自动选择 · 优先本地音色（推荐）</option>' + list.map(function (v) {
-      var sel = v.voiceURI === s.voiceURI || v.name === s.voiceName ? ' selected' : '';
+    var autoName = s.autoVoice ? s.autoVoice.name : '';
+    var options = '<option value=""' + (s.auto ? ' selected' : '') + '>自动选择 · 优先本地音色（推荐）' +
+      (s.auto && autoName ? ' · 当前 ' + esc(autoName) : '') + '</option>' + list.map(function (v) {
+      var sel = !s.auto && (v.voiceURI === s.voiceURI || v.name === s.voiceName) ? ' selected' : '';
       return '<option value="' + esc(v.voiceURI) + '" data-name="' + esc(v.name) + '"' + sel + '>' +
         esc(v.name) + ' · ' + esc(v.lang) + (v.local ? ' · 本地' : ' · 在线') + '</option>';
     }).join('');
@@ -2019,9 +2086,9 @@
       '<div class="tts-diag" id="tts-diag-box">' + ttsDiagHTML() + '</div>' +
       '<div class="tts-field"><label>英语音色</label>' +
       '<select id="tts-voice" data-action="tts-voice">' + options + '</select>' +
-      '<div class="hint">带「本地」的音色直接在设备上合成，不依赖网络，通常最流畅；「在线」音色遇到网络波动容易断流。当前共 ' + list.length + ' 个英语音色。换完音色记得再点一次「播放试听」。</div></div>' +
+      '<div class="hint">默认「自动选择」会帮你挑好并记住一个本地英语音色' + (autoName ? '（当前：<b>' + esc(autoName) + '</b>）' : '') + '，无需手动设置。带「本地」的音色直接在设备上合成，通常最流畅；共 ' + list.length + ' 个英语音色。换完音色记得再点一次「播放试听」。</div></div>' +
       '<div class="tts-field"><label>朗读语速</label><div class="rate-row">' + rates + '</div>' +
-      '<div class="hint">有些音色在过快或过慢的语速下会卡顿，1.00x 最稳。系统检测到卡住时会自动换音色、恢复常速重试一次。</div></div>' +
+      '<div class="hint">有些音色在过快或过慢的语速下会卡顿，1.00x 最稳。系统检测到卡住时会自动重试一次；若本地引擎仍不出声，会自动改播在线 MP3，保证点一下就有声音。</div></div>' +
       '<div class="tts-test"><div><b>试听一句</b><p>Is the flight on time?</p></div>' +
       '<button type="button" class="btn btn-primary" data-action="tts-test">' + icon('play', 14) + ' 播放试听</button></div>' +
       '<div class="tts-test-actions">' +
@@ -2234,6 +2301,24 @@
       state.demoMode = !state.demoMode;
       renderChrome();
       toast(state.demoMode ? '体验模式已开启：不调用麦克风，直接演示完整评分流程' : '已切回真实模式', state.demoMode ? 'warn' : 'success');
+    }
+    else if (a === 'enable-demo') {
+      state.demoMode = true;
+      renderChrome();
+      toast('体验模式已开启：点「重新录音」即可用模拟数据演示完整评分流程', 'success');
+    }
+    else if (a === 'assess-retry') {
+      var ar = state.assessment;
+      if (!ar) return;
+      ar.phase = 'idle';
+      ar.ending = false;
+      ar.lastScore = null;
+      ar.autoMetrics = null;
+      ar.recognitionPayload = null;
+      ar.recognitionPromise = null;
+      var arBox = doc.getElementById('assess-result');
+      if (arBox) arBox.innerHTML = '';
+      updateAssessRecordUI();
     }
     else if (a === 'toggle-sound') {
       var on = SB.store.toggleSound();

@@ -292,6 +292,15 @@ svg { display: block; }
 .diagnose p { margin: 0; font-size: 11px; color: var(--ink-3); line-height: 1.6; }
 .action-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--line-2); }
 
+/* 没有识别到发音：明确的不计分状态，而不是编造一个分数 */
+.no-speech { margin-top: 26px; padding: 24px 26px 20px; border-radius: 18px; border: 1px solid #F3D9A6; background: linear-gradient(120deg, #FFFBF2, #FFF6E6); animation: fadeUp .35s ease both; }
+.no-speech-icon { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; background: var(--amber-tint); color: #B7791F; margin-bottom: 12px; }
+.no-speech-body h3 { margin: 0 0 8px; font-size: 17px; font-weight: 800; color: var(--ink); }
+.no-speech-body p { margin: 0 0 6px; font-size: 12px; color: var(--ink-3); line-height: 1.75; }
+.no-speech-body .no-speech-hint { color: var(--ink-4); }
+.no-speech .action-row { margin-top: 14px; padding-top: 16px; border-top-color: #F0E3C8; }
+.dlg-no-speech { margin-top: 16px; }
+
 /* ---------- finish ---------- */
 .finish-wrap { max-width: 760px; margin: 0 auto; text-align: center; }
 .finish-card { padding: 38px 40px; border-radius: 24px; position: relative; overflow: hidden; }

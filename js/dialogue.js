@@ -637,7 +637,7 @@
   /**
    * 评估一轮对话。
    * @param turn 剧本中的一轮
-   * @param input {transcript, alternatives, metrics, combo, fallback}
+   * @param input {transcript, alternatives, metrics, combo, fallback, allowDemo}
    */
   function evaluate(turn, input) {
     input = input || {};
@@ -645,6 +645,22 @@
     var candidates = (input.alternatives || []).slice();
     if (input.transcript && candidates.indexOf(input.transcript) === -1) candidates.unshift(input.transcript);
     candidates = candidates.filter(function (c) { return SB.scoring.normalize(c).length > 0; });
+
+    // 没识别到任何发音时不再拿参考说法冒充「你说得不错」，返回不计分结果让界面引导重录。
+    // 只有用户主动选「体验模式 / 用参考说法继续」才走演示评分。
+    if (!candidates.length && !input.allowDemo) {
+      return {
+        noSpeech: true,
+        noSpeechReason: metrics.simulated ? 'recorder-unavailable' : 'no-transcript',
+        total: 0, intent: 0, delivery: { total: 0 },
+        groups: [], coverage: 0, reference: turn.answers || [],
+        matched: turn.answers && turn.answers[0] ? turn.answers[0] : null,
+        coach: turn.coach || '', transcript: '', fallback: false, demo: false,
+        stars: 0, words: [], fluencyDetail: {}, diagnose: [],
+        metrics: metrics, sentence: null, xp: 0, combo: 0,
+        multiplier: 1, comboBonus: 0, turn: turn
+      };
+    }
 
     var fallback = !!input.fallback || !candidates.length;
     var spoken = fallback
