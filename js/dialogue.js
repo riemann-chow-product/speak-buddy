@@ -689,8 +689,26 @@
       transcript: spoken,
       alternatives: candidates.length ? candidates : [spoken],
       metrics: metrics,
-      combo: input.combo || 0
+      combo: input.combo || 0,
+      allowDemo: !!input.allowDemo
     });
+
+    // 识别器偶尔会「幻听」出一两个词，但录音本身是静音/没有真实发音：
+    // scoring 已经判成 noSpeech(total 0)。这里必须原样透出，绝不能再用
+    // clamp(..., 30, 99) 的下限把它抬成及格的 30 分、还发 XP。
+    if (delivery.noSpeech) {
+      return {
+        noSpeech: true,
+        noSpeechReason: delivery.noSpeechReason,
+        total: 0, intent: 0, delivery: delivery,
+        groups: [], coverage: 0, reference: turn.answers || [],
+        matched: turn.answers && turn.answers[0] ? turn.answers[0] : null,
+        coach: turn.coach || '', transcript: '', fallback: false, demo: false,
+        stars: 0, words: [], fluencyDetail: {}, diagnose: [],
+        metrics: metrics, sentence: null, xp: 0, combo: 0,
+        multiplier: 1, comboBonus: 0, turn: turn
+      };
+    }
 
     var total = clamp(Math.round(0.62 * intent + 0.38 * delivery.total), 30, 99);
     var demo = fallback || !!metrics.simulated || delivery.demo;

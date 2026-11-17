@@ -62,7 +62,7 @@ Open **http://localhost:8000** in Chrome or Edge.
 | Firefox | Partial / unavailable | Online MP3 fallback | Real scoring needs recognition; otherwise enable Experience mode |
 
 - **Microphone + secure context:** `getUserMedia` and speech recognition work only on `localhost` or HTTPS; grant the microphone permission when prompted.
-- **Autoplay policy:** browsers require a user gesture before a page may speak. The first playback is issued synchronously inside the click, so pressing play always produces audio.
+- **Autoplay policy:** browsers require a user gesture before a page may speak. The click first unlocks audio synchronously; if the voice list is not ready yet, the utterance itself is issued on the next tick. Either way, pressing play produces audio without any in-app setting.
 - Browsers without the built-in speech engine automatically fall back to online audio pronunciation. Browsers without speech recognition cannot produce a real score: silent / unrecognized takes show a 0-point result with a one-click **Experience mode** switch that enables clearly-labelled simulated scoring.
 
 ## How scoring works
@@ -73,14 +73,14 @@ Open **http://localhost:8000** in Chrome or Edge.
    - *Fluency* (24%): speaking duration vs. an ideal pace, pause count, and volume.
    - *Completeness* (24%): how much of the sentence was covered (missing / extra words).
    - Weighted total → 0–100 → stars (≥88 = 3★, ≥72 = 2★, ≥55 = 1★) → XP and combo.
-3. **Honest no-speech handling.** Silent or unrecognized recordings are **not** given a passing score. If no speech is recognized, the result shows **"no speech detected / 未检测到声音"** with **0 points**, no XP / stars / combo, and a **retry** button.
+3. **Honest no-speech handling.** Silent or unrecognized recordings are **not** given a passing score. If no speech is recognized, the result shows **"没有听到你的声音，本次不计分"** ("no speech detected, no score this time") with **0 points**, no XP / stars / combo, and a **retry** button.
 4. **Experience mode (体验模式, also called demo mode).** Toggle it on manually (or from the no-speech result) and scores become clearly-labelled **simulated** values (XP halved) so you can still walk through the full flow. It is never enabled automatically, so a silent attempt can never quietly receive a passing score. Real scores are never mixed with simulated ones.
 5. **Dialogue scoring.** Intent match (62%) + delivery (38%, reusing the shadowing scorer) → total, stars and coach feedback.
 
 ## Pronunciation / TTS
 
 - Pronunciation uses the browser's Web Speech `speechSynthesis`. A **local English voice is auto-selected and saved on load**, and a stalled playback is retried once with the browser's default voice at normal rate.
-- The **first playback is issued synchronously in the click**, respecting the autoplay policy; a click on play always produces audio.
+- A short silent clip is **played synchronously inside the click** to satisfy the autoplay policy; the utterance follows (on the next tick if the voice list is still loading), and a click on play always produces audio.
 - If the built-in engine **fails to start (or the browser has none)**, the app automatically falls back to an **online MP3 pronunciation**: one continuous clip for the whole sentence, tried against Baidu Fanyi TTS, Google Translate TTS and Youdao `dictvoice` in that order. These are **third-party public endpoints, not part of this project or operated by it**, and they require network access; the app itself ships no audio files. Only the fixed sentence text is sent, never your recording. These endpoints apply hotlink protection — a cross-site `<audio>` request carrying a `Referer` gets an empty body, 404 or 500 — so `index.html` sets a document-wide `<meta name="referrer" content="no-referrer">`. Without it the online fallback silently fails in every browser.
 - The **settings modal** (headphone icon, 发音设置) still lets you manually pick an English voice and rate, run **diagnostics** (engine support, voice counts, engine state, last attempt), play a **device test tone** (Web Audio, bypasses the speech engine), **reset the engine**, audition a sample sentence, and restore defaults. Clicking a word chip also speaks that single word.
 
@@ -107,10 +107,10 @@ Restoring overwrites current records; keep a backup or sync code before switchin
 
 | File | Role |
 | --- | --- |
-| [index.html](index.html) | App shell, boot markup, plain `<script>` / stylesheet tags with `?v=13` cache-busting |
+| [index.html](index.html) | App shell, boot markup, plain `<script>` / stylesheet tags with `?v=14` cache-busting |
 | [css/styles.css](css/styles.css) | All styling: design tokens, layout, components, animations (plain CSS, no preprocessor) |
 | [js/data.js](js/data.js) | Course content: 8 units / 24 lessons / 72 sentences, phoneme knowledge base, achievements, daily goal |
-| [js/store.js](js/store.js) | `localStorage` store: XP/levels, combos, streak, daily tasks/chest, achievements, backup/export/import, sync code, reset |
+| [js/store.js](js/store.js) | `localStorage` store: XP/levels, combos, streak, daily tasks/chest, achievements, compact backup export/import, reset |
 | [js/route.js](js/route.js) | Built-in interest topics + custom-topic mapping; builds the personalized 3-stage learning route |
 | [js/speech.js](js/speech.js) | TTS (`speechSynthesis`) and ASR (`SpeechRecognition`) wrappers, voice ranking, settings, diagnostics, engine reset |
 | [js/recorder.js](js/recorder.js) | `getUserMedia` + `MediaRecorder` capture, live waveform/levels, acoustic metrics, self-recording blob URL, simulated fallback |
@@ -126,8 +126,8 @@ Restoring overwrites current records; keep a backup or sync code before switchin
 ## Development notes
 
 - **No build step.** Edit any file and reload; serve the folder with any static server.
-- **Cache busting:** when you edit JS/CSS, bump the `?v=N` query strings on the `<link>` and `<script>` tags in [index.html](index.html) (currently `?v=13`) so browsers pick up the new files.
-- **Code style:** ES5-style JavaScript; every module is an IIFE that attaches to a single global namespace, e.g. `window.SB.data`, `window.SB.store`, `window.SB.speech`, `window.SB.scoring`, `window.SB.app`. Script load order in `index.html` matters (data → speech → recorder → scoring → assessment → dialogue → store → route → fx → app).
+- **Cache busting:** when you edit JS/CSS, bump the `?v=N` query strings on the `<link>` and `<script>` tags in [index.html](index.html) (currently `?v=14`) so browsers pick up the new files.
+- **Code style:** ES5-style JavaScript; every module is an IIFE that attaches to a single global namespace, e.g. `window.SB.data`, `window.SB.store`, `window.SB.speech`, `window.SB.scoring`, `window.SB.dialogue`. Script load order in `index.html` matters (data → speech → recorder → scoring → assessment → dialogue → store → route → fx → app).
 - **Routing:** hash router (`#/home`, `#/practice/<lessonId>`, `#/dialogue[/<scenarioId>]`, `#/stats`, `#/achievements`, `#/finish/<lessonId>`).
 - **Deployment:** it is a fully static site; pushing to GitHub Pages (with the `CNAME` file) is enough.
 
@@ -137,7 +137,7 @@ Licensed under the **Apache License 2.0** — see [LICENSE](LICENSE).
 
 ## FAQ
 
-- **No sound after clicking play?** Click once more (a user gesture unlocks autoplay); if the app shows a "点一下重播 / 点一下开启发音" button, that single click is all that is needed — there is nothing to configure inside the app. Then open 发音设置 → "测设备音量" (device test tone) and "重置语音引擎" (engine reset). If the local engine cannot start, the app switches to online MP3 automatically; that fallback needs an internet connection. If both still fail, check the network: corporate proxies, offline use, and ad blockers (which may block `dict.youdao.com`, `fanyi.baidu.com`, `translate.google.com`) are the usual causes. Chrome/Edge → icon left of the address bar → **Site settings → Sound → Allow**, Safari → Settings → Websites → Auto-Play → **Allow All Auto-Play**, plus system volume/output device. There is no in-app switch to configure.
+- **No sound after clicking play?** Click once more (a user gesture unlocks autoplay); if the app shows a 「点一下重播」/「点一下开启」/「听这一句并开启」 button, that single click is all that is needed — there is nothing to configure inside the app. Then open 发音设置 → "测设备音量" (device test tone) and "重置语音引擎" (engine reset). If the local engine cannot start, the app switches to online MP3 automatically; that fallback needs an internet connection. If both still fail, check the network: corporate proxies, offline use, and ad blockers (which may block `dict.youdao.com`, `fanyi.baidu.com`, `translate.google.com`) are the usual causes. Chrome/Edge → icon left of the address bar → **Site settings → Sound → Allow**, Safari → Settings → Websites → Auto-Play → **Allow All Auto-Play**, plus system volume/output device. There is no in-app switch to configure.
 - **No score / "no speech detected"?** Check that the mic permission is granted, you are on `localhost`/HTTPS, and you are using Chrome or Edge; speak clearly and press **retry**. This 0-point result is intentional — silence is never given a passing score.
 - **Microphone denied or no mic?** Pronunciation still works (local engine or online MP3), and **Experience mode (体验模式)** provides clearly-labelled simulated scores so you can still explore every screen.
 

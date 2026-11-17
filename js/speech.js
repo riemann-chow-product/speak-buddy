@@ -43,12 +43,20 @@
   var lastStatus = { ok: false, voice: '', attempts: 0, reason: '', fallback: false };
   var localFailures = 0;   // 连续「本地引擎启动失败」次数
   var localBroken = false; // 本次会话内直接走在线发音，避免每次点击都白等
+  // 在线 MP3 在「已经出声」后就 resolve 了，但音频还会继续读完。留一个模块级
+  // 引用，切页 / 开始录音 / stopSpeaking 时才能把它真正停掉，避免两句叠着播。
+  var onlineAudio = null;
+  function stopOnlineAudio() {
+    if (!onlineAudio) return;
+    try { onlineAudio.pause(); } catch (e) { /* noop */ }
+    onlineAudio = null;
+  }
 
   // Safari / 部分 Chrome 会要求 audio.play() 必须发生在用户手势的调用栈里。
   // 在线兜底是在本地引擎失败之后（异步）才播放的，手势早已结束，会被拦成
   // NotAllowedError。这里在点击的同步栈里先用一个极短的静音 WAV「解锁」同一个
   // audio 元素，之后换 src 再播就不需要新的手势，也不需要用户去改任何设置。
-  var SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  var SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
   var unlockAudio = null; // 只负责在用户手势里解锁网页音频，绝不参与实际播放
   function primeAudio() {
     if (typeof global.Audio === 'undefined') return;
@@ -205,6 +213,7 @@
   }
 
   function abortCurrent() {
+    stopOnlineAudio(); // 上一句在线 MP3 可能还在继续读，先掐掉再开始新的
     var prev = current;
     if (prev) settle(prev, false, 'interrupted');
     safeCancel(prev);
@@ -313,15 +322,23 @@
     cur.attempts = Math.max(cur.attempts, 1);
     var urls = onlineUrls(cur.text);
     // 每次用全新的元素：避免解锁用的静音片段残留事件串到真实播放上
+    stopOnlineAudio();
     var audio = new global.Audio();
+    onlineAudio = audio;
     audio.preload = 'auto';
+    // 在线 MP3 是常速录好的；按请求的语速等比放慢 / 加快，保证「慢速 0.6x」
+    // 在本地引擎被跳过时依然有效（默认 0.92 视为 1.0x）。
+    var wantRate = typeof cur.options.rate === 'number' ? cur.options.rate : settings.rate;
+    try { audio.playbackRate = Math.max(0.5, Math.min(1.4, wantRate / 0.92)); } catch (e) { /* noop */ }
     cur.audio = audio;
+    // 自然播完时释放引用（不 null 掉，cleanup 会保留它）
+    audio.onended = function () { if (onlineAudio === audio) onlineAudio = null; };
     var pi = 0, finished = false, timer = null, ticket = 0;
 
     function clearTimer() { if (timer) { clearTimeout(timer); timer = null; } }
     function cleanup() {
       clearTimer();
-      audio.onended = null; audio.onerror = null; audio.onplaying = null;
+      audio.onerror = null; audio.onplaying = null;
     }
     function next() {
       if (finished || cur.done) return;
@@ -345,6 +362,7 @@
       finished = true;
       cleanup();
       try { audio.pause(); } catch (e) { /* noop */ }
+      if (onlineAudio === audio) onlineAudio = null;
       settle(cur, false, 'online-failed');
     }
     function tryCurrent() {
@@ -353,6 +371,8 @@
       var url = urls[pi];
       var my = ++ticket;
       try { audio.src = url; } catch (e) { next(); return; }
+      // 换 src 后部分浏览器会重置 playbackRate，这里再设一次
+      try { audio.playbackRate = Math.max(0.5, Math.min(1.4, wantRate / 0.92)); } catch (e) { /* noop */ }
       var p = null;
       try { p = audio.play(); } catch (e) { /* 由 onerror / 超时兜底 */ }
       if (p && typeof p.catch === 'function') {
@@ -526,6 +546,7 @@
   /** Chrome 偶尔会卡在 paused / pending，cancel + resume + 重拉音色能救回来。 */
   function resetEngine() {
     try {
+      stopOnlineAudio();
       if (current) settle(current, false, 'interrupted');
       safeCancel(null, true);
     } catch (e) { /* noop */ }

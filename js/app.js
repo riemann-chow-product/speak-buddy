@@ -383,9 +383,11 @@
       btn.classList.toggle('recording', a.phase === 'recording');
       btn.innerHTML = icon(a.phase === 'recording' ? 'stop' : 'mic', 30);
     }
+    // 「没听到声音」时结果区没有「下一题」按钮，提示语不能还写「点下一题继续」
+    var silentResult = !!doc.querySelector('#assess-result .no-speech');
     if (cap) cap.textContent = a.phase === 'recording' ? '正在聆听… 读完点一下结束'
       : a.phase === 'analyzing' ? '正在分析发音…'
-      : a.phase === 'result' ? '本题完成，点下一题继续'
+      : a.phase === 'result' ? (silentResult ? '没听到声音，点「重新录音」再试一次' : '本题完成，点下一题继续')
       : '点击麦克风朗读，或按空格键';
     if (hint) hint.classList.toggle('hidden', a.phase !== 'idle');
   }
@@ -509,7 +511,7 @@
   function showAssessScore(result) {
     var box = doc.getElementById('assess-result');
     if (!box) return;
-    if (result.noSpeech) { box.innerHTML = noSpeechHTML(result, 'assess-retry'); updateAssessRecordUI(); return; }
+    if (result.noSpeech) { box.innerHTML = noSpeechHTML(result, 'assess-retry', '', false); updateAssessRecordUI(); return; }
     var word = result.total >= 85 ? '很稳！' : result.total >= 70 ? '不错，继续' : '再练练会更好';
     box.innerHTML = '<div class="assess-score">' +
       '<div class="assess-score-num">' + result.total + '</div>' +
@@ -917,7 +919,7 @@
   function dlgFeedbackHTML(d) {
     var r = d.lastResult;
     if (!r) return '';
-    if (r.noSpeech) return noSpeechHTML(r, 'dlg-retry', 'dlg-no-speech');
+    if (r.noSpeech) return noSpeechHTML(r, 'dlg-retry', 'dlg-no-speech', true, 'dlg-skip');
     var fd = r.fluencyDetail || {};
     var groups = r.groups.map(function (g) {
       return '<span class="dlg-group ' + (g.ok ? 'hit' : 'miss') + '">' + icon(g.ok ? 'check' : 'close', 11) + ' ' + esc(g.label) + '</span>';
@@ -969,7 +971,10 @@
     var rs = d.results.filter(Boolean);
     var avg = rs.length ? Math.round(rs.reduce(function (a, b) { return a + b.total; }, 0) / rs.length) : 0;
     var starsN = SB.scoring.starsFor(avg);
-    var rows = rs.map(function (r, i) {
+    // 按原始轮次下标遍历，跳过静音 / 未完成的轮次，否则过滤后会把后面几轮的
+    // 分数错配到前面几轮的 goal 上。
+    var rows = d.results.map(function (r, i) {
+      if (!r || !sc.turns[i]) return '';
       return '<div class="review-item"><span class="pill ' + (r.total >= 85 ? 'mint' : r.total >= 70 ? 'brand' : 'amber') + '">' + r.total + '</span>' +
         '<div class="r-en">' + esc(sc.turns[i].goal) + '</div>' + stars(r.stars, 14) + '</div>';
     }).join('');
@@ -1219,6 +1224,29 @@
     updateDlgUI();
   }
 
+  /** 静音轮次跳过：不计分、不入账，只推进对话，避免麦克风不可用时卡死。 */
+  function dlgSkip() {
+    var d = state.dialogue, sc = dlgScenario();
+    if (!d || !sc || d.phase !== 'feedback') return;
+    d.results[d.index] = null;
+    d.lastResult = null;
+    if (d.index < sc.turns.length - 1) {
+      d.index += 1;
+      d.phase = 'idle';
+      d.showHint = false;
+      d.waveLevels = [];
+      d.autoMetrics = null;
+      d.recognizer = null;
+      d.recognitionPayload = null;
+      d.recognitionPromise = null;
+      pushDlgPartner();
+      renderView();
+      updateDlgUI();
+    } else {
+      finishDialogue();
+    }
+  }
+
   function dlgNext() {
     var d = state.dialogue, sc = dlgScenario();
     if (!d || !sc || d.phase !== 'feedback') return;
@@ -1243,23 +1271,26 @@
   function finishDialogue() {
     var d = state.dialogue, sc = dlgScenario();
     var rs = d.results.filter(Boolean);
-    if (!rs.length) return;
-    var avg = Math.round(rs.reduce(function (a, b) { return a + b.total; }, 0) / rs.length);
+    var avg = rs.length ? Math.round(rs.reduce(function (a, b) { return a + b.total; }, 0) / rs.length) : 0;
     var starsN = SB.scoring.starsFor(avg);
     var xp = 0, levelUp = 0, earned = [];
     // 对话结束时统一结算，保证「再说一次」不会重复计入 XP 与每日任务
-    rs.forEach(function (r) {
-      var reward = SB.store.recordSentence(r);
-      xp += r.xp;
-      if (reward.levelUp) levelUp = reward.level;
-      earned = earned.concat(reward.achievements);
-    });
-    SB.store.recordDialogue(d.id, starsN, avg);
+    // 一轮都没有有效发音时不记录成绩、不发奖励，但仍要正常收尾，避免卡在 feedback。
+    if (rs.length) {
+      rs.forEach(function (r) {
+        var reward = SB.store.recordSentence(r);
+        xp += r.xp;
+        if (reward.levelUp) levelUp = reward.level;
+        earned = earned.concat(reward.achievements);
+      });
+      SB.store.recordDialogue(d.id, starsN, avg);
+    }
     d.totalXp = xp;
     d.phase = 'done';
     d.finished = true;
     renderView();
     renderChrome();
+    if (!rs.length) { toast('这场对话没有完成任何有效发音，本次不计分', 'warn'); return; }
     if (starsN === 3) SB.fx.confetti(34);
     if (levelUp) {
       setTimeout(function () {
@@ -1716,22 +1747,27 @@
     return '这次没有识别到英文发音（没开口、说得太轻，或语音识别服务没有返回结果）。';
   }
   /** 不说话就绝不给分：0 分、0 XP、0 星，并给出重新录音 / 体验模式两个出口。 */
-  function noSpeechHTML(result, retryAction, extraClass) {
+  function noSpeechHTML(result, retryAction, extraClass, offerDemo, skipAction) {
+    // 定级测评里不能从「没听到声音」一键切到体验模式：那样会用模拟分数定级。
+    var showDemo = offerDemo !== false && !state.demoMode;
     return '<div class="no-speech ' + (extraClass || '') + '">' +
       '<div class="no-speech-icon">' + icon('mic', 22) + '</div>' +
       '<div class="no-speech-body"><h3>没有听到你的声音，本次不计分</h3>' +
       '<p>' + esc(noSpeechReasonText(result.noSpeechReason)) + ' 本次不会获得分数、星星、连击和 XP。</p>' +
-      '<p class="no-speech-hint">请用正常音量把句子读完再点结束；若浏览器不支持语音识别，可开启「体验模式」用模拟评分体验完整流程。</p></div>' +
+      '<p class="no-speech-hint">' + (offerDemo === false
+        ? '请用正常音量把句子读完再点结束；定级测评需要真实发音，不会用模拟数据给分。'
+        : '请用正常音量把句子读完再点结束；若浏览器不支持语音识别，可开启「体验模式」用模拟评分体验完整流程。') + '</p></div>' +
       '<div class="action-row">' +
       '<button class="btn btn-primary" data-action="' + retryAction + '">' + icon('refresh', 15) + ' 重新录音</button>' +
-      (state.demoMode ? '' : '<button class="btn btn-ghost" data-action="enable-demo">' + icon('play', 14) + ' 开启体验模式</button>') +
+      (showDemo ? '<button class="btn btn-ghost" data-action="enable-demo">' + icon('play', 14) + ' 开启体验模式</button>' : '') +
+      (skipAction ? '<button class="btn btn-ghost" data-action="' + skipAction + '">' + icon('arrowRight', 14) + ' 跳过（不计分）</button>' : '') +
       '</div></div>';
   }
 
   function renderFeedback(result) {
     var slot = doc.getElementById('feedback-slot');
     if (!slot) return;
-    if (result.noSpeech) { slot.innerHTML = noSpeechHTML(result, 'retry'); return; }
+    if (result.noSpeech) { slot.innerHTML = noSpeechHTML(result, 'retry', '', true, 'skip'); return; }
     var d = result.fluencyDetail || {};
     var metrics = [
       { label: '准确度', v: Math.round(result.accuracy * 100), cls: '' },
@@ -1778,6 +1814,16 @@
       '<button class="btn btn-primary" data-action="next">' + (state.session.index === current().lesson.sentences.length - 1 ? '完成本关' : '下一句') + ' ' + icon('arrowRight', 15) + '</button>' +
       '</div></div>';
     SB.fx.countUp(doc.getElementById('score-number'), result.total, 750);
+  }
+
+  /** 静音后跳过这句：不计分、不把 0 分塞进本关成绩，只推进进度。 */
+  function skipSentence() {
+    var lesson = current().lesson;
+    clearSentence(); // 清掉 lastResult / phase / 反馈区，避免被 nextSentence 当成绩收走
+    if (state.session.index < lesson.sentences.length - 1) {
+      state.session.index++;
+      renderView();
+    } else finishLesson();
   }
 
   function nextSentence() {
@@ -2295,6 +2341,7 @@
     else if (a === 'speak-word') speakText(el.dataset.word, 0.85, null);
     else if (a === 'record') { if (state.phase === 'recording') endRecording(); else startRecording(); }
     else if (a === 'retry') { clearSentence(); renderView(); }
+    else if (a === 'skip') skipSentence();
     else if (a === 'next') nextSentence();
     else if (a === 'listen-self') {
       if (state.lastResult && state.lastResult.metrics && state.lastResult.metrics.url) {
@@ -2310,6 +2357,7 @@
     else if (a === 'enable-demo') {
       state.demoMode = true;
       renderChrome();
+      renderView(); // 立刻刷新结果区，去掉已失效的「开启体验模式」按钮
       toast('体验模式已开启：点「重新录音」即可用模拟数据演示完整评分流程', 'success');
     }
     else if (a === 'assess-retry') {
@@ -2319,10 +2367,14 @@
       ar.ending = false;
       ar.lastScore = null;
       ar.autoMetrics = null;
+      ar.waveLevels = [];
+      ar.recognizer = null;
       ar.recognitionPayload = null;
       ar.recognitionPromise = null;
       var arBox = doc.getElementById('assess-result');
       if (arBox) arBox.innerHTML = '';
+      var arWave = doc.getElementById('assess-canvas');
+      if (arWave) { try { arWave.getContext('2d').clearRect(0, 0, arWave.width, arWave.height); } catch (e) { /* noop */ } }
       updateAssessRecordUI();
     }
     else if (a === 'toggle-sound') {
@@ -2349,6 +2401,7 @@
     }
     else if (a === 'dlg-quick') dlgQuick();
     else if (a === 'dlg-retry') dlgRetry();
+    else if (a === 'dlg-skip') dlgSkip();
     else if (a === 'dlg-next') dlgNext();
     else if (a === 'dlg-again') {
       startDialogue(el.dataset.id || (state.dialogue && state.dialogue.id));
@@ -2373,7 +2426,13 @@
       for (var ci = 0; ci < chips.length; ci++) chips[ci].classList.toggle('on', Math.abs(parseFloat(chips[ci].dataset.rate) - tr) < 0.02);
       SB.fx.play('click');
     }
-    else if (a === 'tts-reset') { SB.speech.setVoice('', ''); SB.speech.setRate(0.92); showTtsModal(); toast('已恢复默认音色与语速', 'success'); }
+    else if (a === 'tts-reset') {
+      SB.speech.resetEngine(); // 同时清掉 localBroken，否则恢复默认后仍一直走在线发音
+      SB.speech.setVoice('', '');
+      SB.speech.setRate(0.92);
+      showTtsModal();
+      toast('已恢复默认音色与语速，并重新启用本地语音引擎', 'success');
+    }
     else if (a === 'tts-test') {
       el.disabled = true;
       SB.speech.speak('Is the flight on time?').then(function () {
